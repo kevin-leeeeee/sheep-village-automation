@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.exe
+*.dll
+*.so
+
+# Environments & Packages
+.env
+.venv
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs & Temporary files
+*.log
+*.tmp
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store

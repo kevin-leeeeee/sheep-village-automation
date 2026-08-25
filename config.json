@@ -1,0 +1,75 @@
+{
+  "coordinates": [
+    [
+      491,
+      1087
+    ],
+    [
+      629,
+      1088
+    ],
+    [
+      767,
+      1089
+    ],
+    [
+      905,
+      1090
+    ],
+    [
+      1043,
+      1091
+    ],
+    [
+      1182,
+      1093
+    ]
+  ],
+  "wolf_coords": [
+    [
+      1285,
+      755
+    ],
+    [
+      1334,
+      755
+    ],
+    [
+      1383,
+      755
+    ],
+    [
+      1285,
+      804
+    ],
+    [
+      1334,
+      804
+    ],
+    [
+      1383,
+      804
+    ]
+  ],
+  "next_page_coord": [
+    1276,
+    1124
+  ],
+  "home_coord": [
+    507,
+    985
+  ],
+  "mine_coord": null,
+  "load_delay": "1.5",
+  "wolf_delay": "0.1",
+  "interval": "0.1",
+  "page_delay": "1.0",
+  "max_pages": "10",
+  "cycle": "0",
+  "threshold": 80,
+  "wolf_var": true,
+  "mining_var": true,
+  "auto_page_var": true,
+  "back_home_var": true,
+  "stop_on_invite_var": true
+}
