@@ -266,8 +266,18 @@ class FriendPatrolAutomation:
             total_mining = 0
             total_friends = 0
 
+            # 解析要跳過的好友序號 (如: "1" 或 "1, 2")
+            skip_indices = set()
+            raw_skip = str(self.gui.skip_friend_idx_var.get()).strip()
+            if raw_skip:
+                for part in raw_skip.replace('，', ',').replace('、', ',').split(','):
+                    part = part.strip()
+                    if part.isdigit():
+                        skip_indices.add(int(part))
+
             self.log('--------------------------------------------')
-            self.log(f'開始執行: 好友數={len(self.gui.coordinates)}, 頁數={max_pages}')
+            skip_info = f"，跳過好友 #{','.join(map(str, sorted(skip_indices)))}" if skip_indices else ""
+            self.log(f'開始執行: 好友數={len(self.gui.coordinates)}, 頁數={max_pages}{skip_info}')
             if do_wolf:
                 wolf_count = len(self.gui.wolf_coords)
                 self.log(f'🐺 啟用範圍覆蓋敲狼: 共 {wolf_count} 個敲打熱點 (敲後等待 {wolf_after_delay}s)')
@@ -279,6 +289,11 @@ class FriendPatrolAutomation:
                 for idx, coord in enumerate(self.gui.coordinates, start=1):
                     if not self.running:
                         break
+
+                    # 判斷是否跳過該好友 (例如避免按到自己)
+                    if idx in skip_indices:
+                        self.log(f'⏭ [跳過] 第 {current_page} 頁好友 #{idx} (避免點擊自己)')
+                        continue
 
                     x, y = coord
                     pyautogui.leftClick(x, y)
@@ -541,6 +556,15 @@ class GUI:
         self.max_pages_var = tk.StringVar(value='10')
         tk.Entry(sf2, textvariable=self.max_pages_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
+        # 跳過好友設定 (例如跳過自己)
+        sf3 = tk.Frame(param_box)
+        sf3.pack(fill='x', pady=1)
+
+        tk.Label(sf3, text='跳過好友序號:', font=('Arial', 8)).pack(side='left')
+        self.skip_friend_idx_var = tk.StringVar(value='')
+        tk.Entry(sf3, textvariable=self.skip_friend_idx_var, width=5, font=('Arial', 8)).pack(side='left', padx=1)
+        tk.Label(sf3, text='(如: 1 或 1,2，跳過自己)', font=('Arial', 8), fg='gray').pack(side='left', padx=(1, 4))
+
         # 圖像匹配閾值 (%)
         threshold_frame = tk.LabelFrame(main, text='圖像匹配閾值 (%)', padx=5, pady=2)
         threshold_frame.pack(fill='x', pady=2)
@@ -579,6 +603,7 @@ class GUI:
             'max_pages': self.max_pages_var.get(),
             'mine_delay': self.mine_delay_var.get(),
             'threshold': self.threshold_var.get(),
+            'skip_friend_idx': self.skip_friend_idx_var.get(),
             'wolf_var': self.wolf_var.get(),
             'mining_var': self.mining_var.get(),
             'auto_page_var': self.auto_page_var.get(),
@@ -619,6 +644,7 @@ class GUI:
             if 'max_pages' in data: self.max_pages_var.set(str(data['max_pages']))
             if 'mine_delay' in data: self.mine_delay_var.set(str(data['mine_delay']))
             if 'threshold' in data: self.threshold_var.set(str(data['threshold']))
+            if 'skip_friend_idx' in data: self.skip_friend_idx_var.set(str(data['skip_friend_idx']))
 
             if 'wolf_var' in data: self.wolf_var.set(bool(data['wolf_var']))
             if 'mining_var' in data: self.mining_var.set(bool(data['mining_var']))
