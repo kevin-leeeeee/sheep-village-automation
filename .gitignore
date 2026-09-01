@@ -28,3 +28,7 @@ dist/
 Thumbs.db
 [Dd]esktop.ini
 .DS_Store
+
+# User configuration
+config.json
+

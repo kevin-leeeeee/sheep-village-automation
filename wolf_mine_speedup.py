@@ -199,12 +199,12 @@ class FriendPatrolAutomation:
     def check_invite_popup_and_stop(self):
         """
         檢查是否出現「暫時不支持邀請好友」彈窗
-        優先採用 Win32 原生視窗句柄偵測 (0.001s 100% 精準)，次要採用廣域圖像匹配備援
+        採用 Win32 API 原生視窗句柄偵測 (0.001s 100% 精準)
         """
         if not self.gui.stop_on_invite_var.get():
             return False
 
-        # 1. 優先：Win32 API 原生視窗句柄偵測 (0.001 秒，100% 跨裝置精準)
+        # Win32 API 原生視窗句柄偵測 (0.001 秒，100% 跨裝置精準)
         try:
             hwnd = ctypes.windll.user32.FindWindowW(None, 'flashplayerdesktop')
             if hwnd and ctypes.windll.user32.IsWindowVisible(hwnd):
@@ -215,27 +215,6 @@ class FriendPatrolAutomation:
         except Exception:
             pass
 
-        # 2. 備援：圖像匹配文字
-        screenshot = self.gui.capture_screen()
-        if screenshot is None:
-            return False
-
-        path_text = get_image_path('yaoqing_text.png')
-        if not os.path.exists(path_text):
-            return False
-
-        pos_t, val_t, _ = self.find_image_multiscale(['yaoqing_text.png'], screenshot)
-
-        if pos_t and val_t >= 0.70:
-            self.log(f'🛑 [圖片辨識] 偵測到「暫時不支持邀請好友」彈窗 (匹配度: {val_t*100:.1f}%)！強制停止。')
-            try:
-                if not self.click_image('yaoqing_queding.png', silent_fail=True, screenshot=screenshot):
-                    pyautogui.leftClick(pos_t[0] + 50, pos_t[1] + 70)
-                time.sleep(0.3)
-            except Exception:
-                pass
-            return True
-
         return False
 
     def patrol_loop(self):
@@ -243,6 +222,10 @@ class FriendPatrolAutomation:
             load_delay = float(self.gui.load_delay_var.get())
             click_interval = float(self.gui.interval_var.get())
             wolf_after_delay = float(self.gui.wolf_delay_var.get())
+            try:
+                wolf_click_count = max(1, int(self.gui.wolf_click_count_var.get()))
+            except Exception:
+                wolf_click_count = len(self.gui.wolf_coords)
             page_delay = float(self.gui.page_delay_var.get())
             max_pages = int(self.gui.max_pages_var.get())
             mine_delay = float(self.gui.mine_delay_var.get())
@@ -254,6 +237,7 @@ class FriendPatrolAutomation:
             load_delay = 1.8
             click_interval = 0.12
             wolf_after_delay = 0.6
+            wolf_click_count = 6
             page_delay = 1.0
             max_pages = 10
             mine_delay = 0.4
@@ -279,8 +263,8 @@ class FriendPatrolAutomation:
             skip_info = f"，跳過好友 #{','.join(map(str, sorted(skip_indices)))}" if skip_indices else ""
             self.log(f'開始執行: 好友數={len(self.gui.coordinates)}, 頁數={max_pages}{skip_info}')
             if do_wolf:
-                wolf_count = len(self.gui.wolf_coords)
-                self.log(f'🐺 啟用範圍覆蓋敲狼: 共 {wolf_count} 個敲打熱點 (敲後等待 {wolf_after_delay}s)')
+                target_coords = self.gui.wolf_coords[:wolf_click_count]
+                self.log(f'🐺 啟用範圍覆蓋敲狼: 點擊前 {len(target_coords)} 個熱點 (敲後等待 {wolf_after_delay}s)')
             self.log('--------------------------------------------')
 
             while self.running and current_page <= max_pages:
@@ -312,8 +296,9 @@ class FriendPatrolAutomation:
 
                     # 1. 範圍覆蓋敲狼
                     if do_wolf and self.gui.wolf_coords:
-                        self.log(f'🐺 執行草地範圍覆蓋敲狼 ({len(self.gui.wolf_coords)} 點)...')
-                        for wx, wy in self.gui.wolf_coords:
+                        target_coords = self.gui.wolf_coords[:wolf_click_count]
+                        self.log(f'🐺 執行草地範圍覆蓋敲狼 ({len(target_coords)} 個熱點)...')
+                        for wx, wy in target_coords:
                             if not self.running:
                                 break
                             pyautogui.leftClick(wx, wy)
@@ -493,9 +478,23 @@ class GUI:
         row_wolf = tk.Frame(coord_box)
         row_wolf.pack(fill='x', pady=1)
         tk.Button(row_wolf, text='兩點框選草地', command=self.start_wolf_box_wizard, bg="#E65100", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Button(row_wolf, text='清空', command=self.clear_wolf_coords, font=('Arial', 8)).pack(side='left', padx=1)
+        tk.Label(row_wolf, text='網格:', font=('Arial', 8)).pack(side='left', padx=(2, 0))
+        self.wolf_cols_var = tk.StringVar(value='3')
+        tk.Entry(row_wolf, textvariable=self.wolf_cols_var, width=2, font=('Arial', 8)).pack(side='left')
+        tk.Label(row_wolf, text='x', font=('Arial', 8)).pack(side='left')
+        self.wolf_rows_var = tk.StringVar(value='2')
+        tk.Entry(row_wolf, textvariable=self.wolf_rows_var, width=2, font=('Arial', 8)).pack(side='left')
+
+        def on_grid_change(*args):
+            if not getattr(self, '_loading_config', False):
+                self.update_grid_from_existing_bounds()
+
+        self.wolf_cols_var.trace_add('write', on_grid_change)
+        self.wolf_rows_var.trace_add('write', on_grid_change)
+
+        tk.Button(row_wolf, text='清空', command=self.clear_wolf_coords, font=('Arial', 8)).pack(side='left', padx=2)
         self.wolf_info_lbl = tk.Label(row_wolf, text='(熱點: 5點)', font=('Arial', 8), fg='#B71C1C')
-        self.wolf_info_lbl.pack(side='left', padx=3)
+        self.wolf_info_lbl.pack(side='left', padx=2)
 
         # 行 2: 好友生成
         row_friend = tk.Frame(coord_box)
@@ -533,18 +532,22 @@ class GUI:
         self.load_delay_var = tk.StringVar(value='1.8')
         tk.Entry(sf1, textvariable=self.load_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
-        tk.Label(sf1, text='②點擊間隔:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
+        tk.Label(sf1, text='②敲熱點數:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
+        self.wolf_click_count_var = tk.StringVar(value='6')
+        tk.Entry(sf1, textvariable=self.wolf_click_count_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
+
+        tk.Label(sf1, text='點擊間隔:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
         self.interval_var = tk.StringVar(value='0.12')
         tk.Entry(sf1, textvariable=self.interval_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
-
-        tk.Label(sf1, text='③敲完等待:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
-        self.wolf_delay_var = tk.StringVar(value='0.6')
-        tk.Entry(sf1, textvariable=self.wolf_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
         sf2 = tk.Frame(param_box)
         sf2.pack(fill='x', pady=1)
 
-        tk.Label(sf2, text='④礦山等待:', font=('Arial', 8)).pack(side='left')
+        tk.Label(sf2, text='③敲完等待:', font=('Arial', 8)).pack(side='left')
+        self.wolf_delay_var = tk.StringVar(value='0.6')
+        tk.Entry(sf2, textvariable=self.wolf_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
+
+        tk.Label(sf2, text='④礦山等待:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
         self.mine_delay_var = tk.StringVar(value='0.4')
         tk.Entry(sf2, textvariable=self.mine_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
@@ -597,6 +600,9 @@ class GUI:
             'next_page_coord': self.next_page_coord,
             'mine_coord': self.mine_coord,
             'load_delay': self.load_delay_var.get(),
+            'wolf_cols': self.wolf_cols_var.get(),
+            'wolf_rows': self.wolf_rows_var.get(),
+            'wolf_click_count': self.wolf_click_count_var.get(),
             'wolf_delay': self.wolf_delay_var.get(),
             'interval': self.interval_var.get(),
             'page_delay': self.page_delay_var.get(),
@@ -638,6 +644,9 @@ class GUI:
                 self.mine_coord = tuple(data['mine_coord'])
 
             if 'load_delay' in data: self.load_delay_var.set(str(data['load_delay']))
+            if 'wolf_cols' in data: self.wolf_cols_var.set(str(data['wolf_cols']))
+            if 'wolf_rows' in data: self.wolf_rows_var.set(str(data['wolf_rows']))
+            if 'wolf_click_count' in data: self.wolf_click_count_var.set(str(data['wolf_click_count']))
             if 'wolf_delay' in data: self.wolf_delay_var.set(str(data['wolf_delay']))
             if 'interval' in data: self.interval_var.set(str(data['interval']))
             if 'page_delay' in data: self.page_delay_var.set(str(data['page_delay']))
@@ -700,7 +709,10 @@ class GUI:
         self.log_text.delete('1.0', tk.END)
 
     def update_wolf_info(self):
-        self.wolf_info_lbl.config(text=f'(熱點: {len(self.wolf_coords)}點)')
+        cnt = len(self.wolf_coords)
+        if hasattr(self, 'wolf_click_count_var'):
+            self.wolf_click_count_var.set(str(cnt))
+        self.wolf_info_lbl.config(text=f'(熱點: {cnt}點)')
 
     def clear_wolf_coords(self):
         self.wolf_coords.clear()
@@ -804,7 +816,7 @@ class GUI:
                 elif self.capture_mode == 'w_box2':
                     p2 = (ix, iy)
                     self.root.after(0, lambda: self.auto.log(f'✔ 草地右下角: ({ix}, {iy})'))
-                    self.root.after(0, lambda: self.generate_wolf_grid(self.temp_p1, p2, cols=3, rows=2))
+                    self.root.after(0, lambda: self.generate_wolf_grid(self.temp_p1, p2))
                     self.root.after(0, self.stop_capture)
                     return False
                 elif self.capture_mode == 'crop_q1':
@@ -836,8 +848,30 @@ class GUI:
         self.auto.log(f'✨ 已自動生成 {count} 個好友點擊座標！')
         self.save_config()
 
-    def generate_wolf_grid(self, p1, p2, cols=3, rows=2):
-        """由兩點產生覆蓋草地區域的 3x2 網格敲擊點"""
+    def update_grid_from_existing_bounds(self):
+        """根據現有草地範圍自動依新欄x列重新計算網格點"""
+        if not self.wolf_coords or len(self.wolf_coords) < 2:
+            return
+        try:
+            min_x = min(pt[0] for pt in self.wolf_coords)
+            max_x = max(pt[0] for pt in self.wolf_coords)
+            min_y = min(pt[1] for pt in self.wolf_coords)
+            max_y = max(pt[1] for pt in self.wolf_coords)
+            if max_x - min_x < 10 or max_y - min_y < 10:
+                return
+            self.generate_wolf_grid((min_x, min_y), (max_x, max_y))
+        except Exception:
+            pass
+
+    def generate_wolf_grid(self, p1, p2, cols=None, rows=None):
+        """由兩點產生覆蓋草地區域的網格敲擊點"""
+        if cols is None or rows is None:
+            try:
+                cols = max(1, int(self.wolf_cols_var.get()))
+                rows = max(1, int(self.wolf_rows_var.get()))
+            except Exception:
+                cols, rows = 3, 2
+
         self.wolf_coords.clear()
         min_x, max_x = min(p1[0], p2[0]), max(p1[0], p2[0])
         min_y, max_y = min(p1[1], p2[1]), max(p1[1], p2[1])
@@ -848,8 +882,9 @@ class GUI:
                 ry = min_y + int((max_y - min_y) * (r + 0.5) / rows)
                 self.wolf_coords.append((rx, ry))
 
+        self.wolf_click_count_var.set(str(len(self.wolf_coords)))
         self.update_wolf_info()
-        self.auto.log(f'✨ 成功生成 {len(self.wolf_coords)} 個覆蓋草地的敲狼熱點！')
+        self.auto.log(f'✨ 成功生成 {len(self.wolf_coords)} 個 ({cols}x{rows}) 覆蓋草地的敲狼熱點！')
         self.save_config()
 
     def save_cropped_image(self, p1, p2, filenames):
