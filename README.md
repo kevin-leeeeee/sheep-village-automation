@@ -20,6 +20,14 @@
 ### 3. 升級與自動攻擊 (`upgrade_and_attack.py`)
 - 自動辨識可升級之防禦塔並執行升級與攻擊操作。
 
+### 4. 競技場挑戰 (`arena_challenge.py`)
+- **雙模式自由切換**：
+  - **🛡️ 防守模式**：切磋 ➔ 開始戰鬥 ➔ 動態偵測 ➔ 洗牌翻牌抽獎 ➔ 確定。
+  - **⚔️ 進攻模式**：切磋 ➔ 挑戰 ➔ 出戰隊列派狼（全部自動派出 / 指定第 N 隻狼）➔ 開始戰鬥 ➔ 動態偵測 ➔ 洗牌翻牌抽獎 ➔ 確定。
+- **狼槽兩點極速生成**：滑鼠移至第 1 隻與第 8 隻狼頭像按 `K` 鍵，自動等分算出 8 格精準座標。
+- **雙螢幕 / 多螢幕原生支援**：智慧分析點擊座標，自動鎖定副螢幕設備進行 Windows GDI 硬體截圖辨識。
+- **動態戰鬥與二段式洗牌抽獎**：支援勝利（WIN）與惜敗（LOST）自動辨識，並依序執行「點擊卡片觸發洗牌 ➔ 等待洗牌動畫 ➔ 再次點擊翻牌抽獎 ➔ 確定」全自動結算。
+
 ---
 
 ## 目錄結構
@@ -27,18 +35,20 @@
 ```text
 sheep-village-automation/
 │
-├── images/                      # 圖像辨識比對範本資源
-├── config.json                  # 腳本參數與座標記憶設定檔
+├── images/                      # 圖像辨識比對範本資源 (含勝利、失敗、抽獎等)
+├── config.json                  # 敲狼與巡邏腳本參數與座標設定檔
 ├── friend_links.txt             # 好友清單
 ├── requirements.txt             # Python 相依套件清單
 │
 ├── wolf_mine_speedup.py         # 【功能 1】敲狼與挖礦加速核心
 ├── boss_auto_clicker.py         # 【功能 2】BOSS 自動連點
 ├── upgrade_and_attack.py        # 【功能 3】升級與自動攻擊
+├── arena_challenge.py           # 【功能 4】競技場防守與進攻挑戰
 │
 ├── start_wolf_mine.bat          # 雙擊啟動：敲狼與挖礦加速
 ├── start_boss_clicker.bat       # 雙擊啟動：BOSS 自動點擊
 ├── start_upgrade_attack.bat     # 雙擊啟動：升級與自動攻擊
+├── start_arena_challenge.bat    # 雙擊啟動：競技場防守與進攻挑戰
 │
 ├── .gitignore                   # Git 忽略清單
 └── README.md                    # 專案說明文件
@@ -67,11 +77,12 @@ pip install -r requirements.txt
 - **敲狼與挖礦加速**：雙擊 `start_wolf_mine.bat`
 - **BOSS 自動點擊**：雙擊 `start_boss_clicker.bat`
 - **防禦塔升級與攻擊**：雙擊 `start_upgrade_attack.bat`
+- **競技場防守與進攻**：雙擊 `start_arena_challenge.bat`
 
 或透過指令執行：
 
 ```bash
-python wolf_mine_speedup.py
+python arena_challenge.py
 ```
 
 ---
