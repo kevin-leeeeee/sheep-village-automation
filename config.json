@@ -1,74 +1,90 @@
 {
   "coordinates": [
     [
-      486,
-      995
+      2143,
+      720
     ],
     [
-      624,
-      998
+      2253,
+      719
     ],
     [
-      763,
-      1001
+      2364,
+      718
     ],
     [
-      901,
-      1004
+      2475,
+      717
     ],
     [
-      1040,
-      1007
+      2586,
+      716
     ],
     [
-      1179,
-      1011
+      2697,
+      715
     ]
   ],
   "wolf_coords": [
     [
-      1300,
-      662
+      2805,
+      445
     ],
     [
-      1345,
-      662
+      2831,
+      445
     ],
     [
-      1389,
-      662
+      2856,
+      445
     ],
     [
-      1300,
-      709
+      2882,
+      445
     ],
     [
-      1345,
-      709
+      2805,
+      459
     ],
     [
-      1389,
-      709
+      2831,
+      459
+    ],
+    [
+      2856,
+      459
+    ],
+    [
+      2882,
+      459
     ]
   ],
   "next_page_coord": [
-    1281,
-    1047
+    2777,
+    753
   ],
   "mine_coord": [
-    679,
-    391
+    2286,
+    218
   ],
-  "load_delay": "1.5",
-  "wolf_delay": "0.1",
+  "confirm_coord": [
+    2509,
+    576
+  ],
+  "load_delay": "2",
+  "wolf_cols": "4",
+  "wolf_rows": "2",
+  "wolf_click_count": "8",
+  "wolf_delay": "1",
   "interval": "0.1",
   "page_delay": "1.0",
   "max_pages": "20",
-  "mine_delay": "0.4",
+  "mine_delay": "1",
+  "confirm_delay": "0.5",
   "threshold": "80",
-  "skip_friend_idx": "52",
+  "skip_friend_idx": "0",
   "wolf_var": true,
-  "mining_var": true,
+  "mining_var": false,
   "auto_page_var": true,
   "stop_on_invite_var": true,
   "topmost": true,
