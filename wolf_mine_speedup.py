@@ -86,6 +86,9 @@ class FriendPatrolAutomation:
             'haoyou_next.png': '好友欄下一頁 (haoyou_next.png)',
             'jiayuan.png': '家園領地圖示 (jiayuan.png)',
             'queding.png': '確定按鈕 (queding.png)',
+            'queding_orange.png': '橘色確定按鈕 (queding_orange.png)',
+            'shangxian_short.png': '挖礦上限提示 (shangxian_short.png)',
+            'shangxian_text.png': '挖礦上限文字 (shangxian_text.png)',
             'cha.png': '關閉叉叉 (cha.png)',
             'bosscha.png': 'Boss叉叉 (bosscha.png)',
             'tacha.png': '防禦塔叉叉 (tacha.png)'
@@ -311,13 +314,50 @@ class FriendPatrolAutomation:
             self.log(f'未看到: {friendly_name} (最高匹配度: {val*100:.1f}%)')
         return False
 
+    def check_mine_limit_popup(self, screenshot=None):
+        """專門檢查是否出現『你今天已經幫助很多好友了』上限彈窗"""
+        if screenshot is None:
+            screenshot = self.capture_screen()
+        if screenshot is None:
+            return None
+
+        # 1. 檢查上限文字標籤 (如：幫助很多好友了)
+        pos_txt, val_txt, _ = self.find_image_multiscale(['shangxian_short.png', 'shangxian_text.png'], screenshot)
+        # 2. 檢查橘黃色確定按鈕
+        pos_btn, val_btn, _ = self.find_image_multiscale(['queding_orange.png'], screenshot)
+
+        if pos_txt or pos_btn:
+            if pos_btn:
+                cx = pos_btn[0] + self.monitor_offset_x
+                cy = pos_btn[1] + self.monitor_offset_y
+            else:
+                cx = pos_txt[0] + self.monitor_offset_x
+                cy = pos_txt[1] + self.monitor_offset_y + 135
+            return (cx, cy)
+        return None
+
     def handle_confirm_popup(self, stage_name=""):
-        """處理確定彈窗：優先點擊手動指定座標，並自動檢測畫面中央上限特殊彈窗 (自動補刀並關閉挖礦)"""
+        """處理確定彈窗：優先檢查加速礦上限彈窗，再點擊手動指定座標，並以視覺辨識補刀"""
         try:
             c_delay = float(self.gui.confirm_delay_var.get())
         except Exception:
             c_delay = 0.2
 
+        # 1. 優先專項檢測：是否出現「今日已幫助很多好友了」上限彈窗 (特別是在點擊礦山後)
+        shot = self.capture_screen()
+        limit_pos = self.check_mine_limit_popup(shot)
+        if limit_pos:
+            lx, ly = limit_pos
+            pyautogui.leftClick(lx, ly)
+            time.sleep(c_delay + 0.2)
+            if self.gui.mining_var.get():
+                self.gui.mining_var.set(False)
+                self.log('🛑 [上限觸發] 偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊確定關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
+            else:
+                self.log(f'🛑 偵測到上限特殊彈窗！已點擊確定關閉: ({lx}, {ly})')
+            return True
+
+        # 2. 點擊手動指定確定座標
         clicked_fixed = False
         if getattr(self.gui, 'confirm_coord', None):
             cx, cy = self.gui.confirm_coord
@@ -326,39 +366,33 @@ class FriendPatrolAutomation:
             time.sleep(c_delay)
             clicked_fixed = True
 
-        # 二次檢查/補刀：檢測畫面上是否仍殘留居中或特殊位置的「確定」彈窗 (例如：今日已幫助很多好友了)
-        shot = self.capture_screen()
-        if shot is not None:
-            pos, val, _ = self.find_image_multiscale(['queding.png'], shot)
+        # 3. 二次檢查/補刀：檢測畫面上是否仍殘留確定彈窗 (包含橘黃色與灰藍色確定按鈕)
+        shot2 = self.capture_screen()
+        if shot2 is not None:
+            limit_pos2 = self.check_mine_limit_popup(shot2)
+            if limit_pos2:
+                lx, ly = limit_pos2
+                pyautogui.leftClick(lx, ly)
+                time.sleep(c_delay)
+                if self.gui.mining_var.get():
+                    self.gui.mining_var.set(False)
+                    self.log('🛑 [上限觸發] 偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊確定關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
+                return True
+
+            pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot2)
             if pos:
                 click_x = pos[0] + self.monitor_offset_x
                 click_y = pos[1] + self.monitor_offset_y
-
-                # 判斷是否為不同位置的額外彈窗 (與常規固定座標距離 > 50px)
-                is_extra_popup = True
-                if clicked_fixed and getattr(self.gui, 'confirm_coord', None):
-                    fx, fy = self.gui.confirm_coord
-                    if (click_x - fx) ** 2 + (click_y - fy) ** 2 < 50 ** 2:
-                        is_extra_popup = False
-
                 pyautogui.leftClick(click_x, click_y)
                 time.sleep(c_delay)
-
-                if is_extra_popup:
-                    self.log(f'🛑 [{stage_name}] 偵測到中央上限特殊彈窗！已自動點擊確定關閉: ({click_x}, {click_y})')
-                    # 依使用者指示：自動關閉挖礦加速功能
-                    if self.gui.mining_var.get():
-                        self.gui.mining_var.set(False)
-                        self.log('⚠️ [自動關閉] 偵測到今日幫助好友已達上限，已自動關閉【⚡ 挖礦加速】！後續好友將不再點擊礦山。')
-                else:
-                    self.log(f'✔ [{stage_name}] 影像辨識補點確定彈窗: ({click_x}, {click_y})')
+                self.log(f'✔ [{stage_name}] 影像辨識補點確定彈窗: ({click_x}, {click_y})')
                 return True
 
         return clicked_fixed
 
     def detect_and_click_confirm(self):
         """偵測並點擊確定或關閉按鈕"""
-        for popup_img in ['queding.png', 'cha.png', 'bosscha.png', 'tacha.png', 'yaoqing_queding.png']:
+        for popup_img in ['queding_orange.png', 'queding.png', 'cha.png', 'bosscha.png', 'tacha.png', 'yaoqing_queding.png']:
             if not self.running:
                 break
             if self.click_image(popup_img, silent_fail=True):
@@ -606,6 +640,7 @@ class GUI:
         self.capture_mode = 'friend'
         self.temp_p1 = None
         self.keyboard_listener = None
+        self.screen_overlay = None
         self.auto = FriendPatrolAutomation(self)
         self.topmost = True
         self.root.attributes('-topmost', True)
@@ -1184,8 +1219,17 @@ class GUI:
             return None
 
     def open_screen_overlay(self):
-        """開啟 1:1 直接覆蓋於當前螢幕畫面的透明標記層"""
-        ScreenOverlayDialog(self.root, self)
+        """開啟或關閉 1:1 直接覆蓋於當前螢幕畫面的透明標記層 (重複點擊則切換關閉)"""
+        if hasattr(self, 'screen_overlay') and self.screen_overlay:
+            try:
+                if self.screen_overlay.winfo_exists():
+                    self.screen_overlay.destroy()
+                    self.screen_overlay = None
+                    return
+            except Exception:
+                self.screen_overlay = None
+
+        self.screen_overlay = ScreenOverlayDialog(self.root, self)
 
     def open_preview_dialog(self):
         """開啟畫面座標預覽比對彈窗"""
@@ -1429,27 +1473,39 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.canvas.focus_set()
 
     def update_wolf_box_from_coords(self):
-        """根據當前敲狼點位計算草地外框矩形 (min_x, min_y, max_x, max_y)，自動修正高度過小導致重疊之問題"""
-        if self.edit_wolf_coords and len(self.edit_wolf_coords) >= 2:
+        """根據當前敲狼點位精準計算草地外框矩形 (min_x, min_y, max_x, max_y)，忠實還原草地真實邊界"""
+        if self.edit_wolf_coords and len(self.edit_wolf_coords) >= 1:
             xs = [pt[0] for pt in self.edit_wolf_coords]
             ys = [pt[1] for pt in self.edit_wolf_coords]
             min_x, max_x = min(xs), max(xs)
             min_y, max_y = min(ys), max(ys)
 
-            # 若歷史設定高度或寬度過窄 (例如差距只有幾像素)，自動展開為合理範圍，防止兩排重疊
-            if max_x - min_x < 120:
-                cx = (min_x + max_x) // 2
-                min_x = cx - 70
-                max_x = cx + 70
-            if max_y - min_y < 80:
-                cy = (min_y + max_y) // 2
-                min_y = cy - 45
-                max_y = cy + 45
+            try:
+                cols = max(1, int(self.gui.wolf_cols_var.get()))
+                rows = max(1, int(self.gui.wolf_rows_var.get()))
+            except Exception:
+                cols, rows = 3, 2
 
-            pad = 12
-            self.wolf_box = [min_x - pad, min_y - pad, max_x + pad, max_y + pad]
-            # 依平分規則重新計算各熱點至各小格子正中心
-            self.regenerate_wolf_coords_from_box()
+            # 計算單元格寬高 (中心點間距代表單元格大小)
+            if cols > 1 and max_x > min_x:
+                cell_w = (max_x - min_x) / (cols - 1)
+            else:
+                cell_w = 60
+
+            if rows > 1 and max_y > min_y:
+                cell_h = (max_y - min_y) / (rows - 1)
+            else:
+                cell_h = 50
+
+            # 草地邊界為邊界格中心點往外延伸半個單元格，100% 吻合原始框選範圍
+            bx1 = int(min_x - cell_w * 0.5)
+            by1 = int(min_y - cell_h * 0.5)
+            bx2 = int(max_x + cell_w * 0.5)
+            by2 = int(max_y + cell_h * 0.5)
+
+            self.wolf_box = [bx1, by1, bx2, by2]
+            # 注意：嚴禁在此呼叫 self.regenerate_wolf_coords_from_box()！
+            # 必須保持 edit_wolf_coords 100% 等同於實際點擊的 wolf_coords！
         else:
             self.wolf_box = None
 
@@ -1845,6 +1901,11 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.update_wolf_box_from_coords()
         self.draw_overlay()
         self.status_lbl.config(text="🔄 已還原至開啟時的原始座標", fg="#FFEB3B")
+
+    def destroy(self):
+        if hasattr(self.gui, 'screen_overlay') and self.gui.screen_overlay is self:
+            self.gui.screen_overlay = None
+        super().destroy()
 
 
 class PreviewDialog(tk.Toplevel):

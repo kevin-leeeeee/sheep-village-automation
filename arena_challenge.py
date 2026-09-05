@@ -508,6 +508,7 @@ class ArenaGUI:
         self.capture_key = None
         self.temp_p1 = None
         self.keyboard_listener = None
+        self.screen_overlay = None
 
         self.auto = ArenaDefenseAutomation(self)
 
@@ -634,9 +635,10 @@ class ArenaGUI:
         self.lbl_wolf_slots = tk.Label(d_row3, text='(0/8 點)', font=('Arial', 8), fg='#B71C1C')
         self.lbl_wolf_slots.pack(side='left', padx=6)
 
-        # 清空按鈕行
+        # 清空與標記預覽按鈕行
         r_clear = tk.Frame(main)
         r_clear.pack(fill='x', pady=1)
+        tk.Button(r_clear, text='🖥️ 標記預覽 (即時視覺化微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', fill='x', expand=True, padx=(0, 4))
         tk.Button(r_clear, text='清空當前模式座標', command=self.clear_current_mode_coords, font=('Arial', 8)).pack(side='right')
 
         # ⚙️ 運行參數配置 (按時間執行順序排列)
@@ -675,7 +677,7 @@ class ArenaGUI:
         tk.Entry(p_battle, textvariable=self.battle_timeout_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
         tk.Label(p_battle, text='s)', font=('Arial', 8)).pack(side='left')
 
-        # 行 3: ③ 洗牌等待 ➔ ④ 翻牌等待 ➔ ⑤ 確定等待
+        # 行 3: ③ 洗牌等待 ➔ ④ 翻牌等待 ➔ ⑤ 確定後等待
         p_row2 = tk.Frame(param_box)
         p_row2.pack(fill='x', pady=1)
         tk.Label(p_row2, text='③ 洗牌等待:', font=('Arial', 8, 'bold'), fg='#E65100').pack(side='left')
@@ -686,7 +688,7 @@ class ArenaGUI:
         self.draw_delay_var = tk.StringVar(value='2.5')
         tk.Entry(p_row2, textvariable=self.draw_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
 
-        tk.Label(p_row2, text='⑤ 確定等待:', font=('Arial', 8, 'bold'), fg='#00695C').pack(side='left', padx=(6, 0))
+        tk.Label(p_row2, text='⑤ 確定後等待:', font=('Arial', 8, 'bold'), fg='#00695C').pack(side='left', padx=(6, 0))
         self.confirm_delay_var = tk.StringVar(value='2.0')
         tk.Entry(p_row2, textvariable=self.confirm_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
 
@@ -762,6 +764,47 @@ class ArenaGUI:
             self.auto.log("已清空防守切磋座標")
         self.update_coord_labels()
         self.save_config()
+
+    def open_screen_overlay(self):
+        """開啟或關閉 1:1 直接覆蓋於當前螢幕畫面的透明標記層 (重複點擊則關閉，避免重疊)"""
+        if self.screen_overlay:
+            try:
+                if self.screen_overlay.winfo_exists():
+                    self.screen_overlay.destroy()
+                    self.screen_overlay = None
+                    return
+            except Exception:
+                self.screen_overlay = None
+
+        self.screen_overlay = ScreenOverlayDialog(self.root, self)
+
+    def get_target_monitor_rect(self):
+        """獲取遊戲座標所在螢幕的 (left, top, width, height)"""
+        try:
+            monitors = win32api.EnumDisplayMonitors()
+            pt = self.get_current_spar_coord() or \
+                 self.coords.get('start_battle') or \
+                 self.coords.get('draw') or \
+                 self.coords.get('confirm') or \
+                 self.coords.get('attack_challenge')
+            if not pt and self.coords.get('wolf_slots'):
+                pt = self.coords['wolf_slots'][0]
+
+            if pt and monitors:
+                px, py = pt
+                for hMonitor, hdcMonitor, rMonitor in monitors:
+                    m_info = win32api.GetMonitorInfo(hMonitor)
+                    m_rect = m_info['Monitor']
+                    if m_rect[0] <= px <= m_rect[2] and m_rect[1] <= py <= m_rect[3]:
+                        return m_rect[0], m_rect[1], m_rect[2] - m_rect[0], m_rect[3] - m_rect[1]
+
+            if monitors:
+                m_info = win32api.GetMonitorInfo(monitors[0][0])
+                m_rect = m_info['Monitor']
+                return m_rect[0], m_rect[1], m_rect[2] - m_rect[0], m_rect[3] - m_rect[1]
+        except Exception:
+            pass
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
     def start_two_point_wolf_wizard(self):
         self.capture_mode = 'wolf_p1'
@@ -857,7 +900,7 @@ class ArenaGUI:
             "   畫面出現結算（勝利/惜敗/抽獎）後，第 1 次點擊卡片觸發洗牌，等待三張卡片背對翻轉並洗牌結束的時間。\n\n"
             "④ 翻牌等待：\n"
             "   第 2 次點擊卡片正式抽獎，等待獎勵翻開揭曉並彈出獲獎確定彈窗的時間。\n\n"
-            "⑤ 確定等待：\n"
+            "⑤ 確定後等待：\n"
             "   點擊獲獎彈窗「確定」按鈕後，關閉彈窗並返回競技場主畫面，準備下一輪切磋。"
         )
         messagebox.showinfo("執行順序與階段說明", msg)
@@ -945,6 +988,302 @@ class ArenaGUI:
             self.auto.log("📂 已成功載入上次保存的配置與座標")
         except Exception as e:
             self.auto.log(f"載入配置失敗: {e}")
+
+
+class ScreenOverlayDialog(tk.Toplevel):
+    """直接覆蓋於當前螢幕之透明座標標記層 (所見即所得：支援滑鼠自由拖曳與即時儲存)"""
+    def __init__(self, parent, gui):
+        super().__init__(parent)
+        self.gui = gui
+
+        left, top, width, height = self.gui.get_target_monitor_rect()
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+
+        # 備份原始座標 (供還原)
+        self.orig_coords = {}
+        for k, v in self.gui.coords.items():
+            if k == 'wolf_slots' and v:
+                self.orig_coords[k] = [list(pt) for pt in v]
+            elif v:
+                self.orig_coords[k] = list(v)
+            else:
+                self.orig_coords[k] = None
+
+        # 當前編輯中的座標
+        self.edit_coords = {}
+        for k, v in self.orig_coords.items():
+            if k == 'wolf_slots' and v:
+                self.edit_coords[k] = [list(pt) for pt in v]
+            elif v:
+                self.edit_coords[k] = list(v)
+            else:
+                self.edit_coords[k] = None
+
+        self.drag_info = None
+
+        # 無邊框全螢幕覆蓋與置頂
+        self.overrideredirect(True)
+        self.geometry(f"{width}x{height}+{left}+{top}")
+        self.attributes('-topmost', True)
+
+        # 設定 Windows 專屬完全透明背景通道
+        self.TRANS_COLOR = '#010203'
+        try:
+            self.attributes('-transparentcolor', self.TRANS_COLOR)
+        except Exception:
+            pass
+
+        self.canvas = tk.Canvas(self, bg=self.TRANS_COLOR, highlightthickness=0, width=width, height=height)
+        self.canvas.pack(fill='both', expand=True)
+
+        self.setup_control_bar()
+        self.draw_overlay()
+
+        self.canvas.bind('<ButtonPress-1>', self.on_press)
+        self.canvas.bind('<B1-Motion>', self.on_motion)
+        self.canvas.bind('<ButtonRelease-1>', self.on_release)
+        self.canvas.bind('<Motion>', self.on_hover)
+
+        # 快速關閉：滑鼠右鍵或 ESC
+        self.canvas.bind('<Button-3>', lambda e: self.destroy())
+        self.bind('<Button-3>', lambda e: self.destroy())
+        self.bind('<Escape>', lambda e: self.destroy())
+
+        self.focus_force()
+        self.canvas.focus_set()
+
+    def setup_control_bar(self):
+        self.ctrl_frame = tk.Frame(self, bg='#212121', padx=14, pady=8, highlightbackground='#FFFFFF', highlightthickness=1)
+        self.ctrl_frame.place(relx=0.5, y=18, anchor='n')
+
+        mode_text = "⚔️ 進攻模式" if self.gui.mode_var.get() == 'attack' else "🛡️ 防守模式"
+        self.status_lbl = tk.Label(self.ctrl_frame, text=f"💡 當前【{mode_text}】：按住標籤或圖示即可拖曳移動座標 | 【右鍵】或【ESC】關閉", font=('Microsoft JhengHei', 9, 'bold'), bg='#212121', fg='#FFEB3B')
+        self.status_lbl.pack(side='left', padx=(0, 16))
+
+        save_btn = tk.Button(self.ctrl_frame, text="💾 儲存並套用", command=self.save_and_apply, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
+        save_btn.pack(side='left', padx=4)
+
+        reset_btn = tk.Button(self.ctrl_frame, text="🔄 還原", command=self.reset_coords, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=6)
+        reset_btn.pack(side='left', padx=4)
+
+        close_btn = tk.Button(self.ctrl_frame, text="❌ 關閉 (右鍵/ESC)", command=self.destroy, bg="#E53935", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
+        close_btn.pack(side='left', padx=4)
+
+    def draw_overlay(self):
+        c = self.canvas
+        c.delete('overlay_item')
+        ox = self.left
+        oy = self.top
+        self.label_hit_boxes = []
+
+        def draw_pin(px, py, text, color, target_info, shape='circle', radius=14):
+            rx = px - ox
+            ry = py - oy
+
+            if shape == 'circle':
+                c.create_oval(rx - radius, ry - radius, rx + radius, ry + radius, outline=color, width=3, tags='overlay_item')
+                c.create_oval(rx - 3, ry - 3, rx + 3, ry + 3, fill='red', outline='white', width=1, tags='overlay_item')
+            elif shape == 'rect':
+                c.create_rectangle(rx - radius, ry - radius, rx + radius, ry + radius, outline=color, width=3, tags='overlay_item')
+                c.create_oval(rx - 3, ry - 3, rx + 3, ry + 3, fill='red', outline='white', width=1, tags='overlay_item')
+
+            tx = rx + radius + 8
+            ty = ry
+            t_item = c.create_text(tx, ty, text=text, anchor='w', fill='white', font=('Microsoft JhengHei', 9, 'bold'), tags='overlay_item')
+            bbox = c.bbox(t_item)
+            if bbox:
+                bx1, by1, bx2, by2 = bbox[0] - 6, bbox[1] - 3, bbox[2] + 6, bbox[3] + 3
+                bg_item = c.create_rectangle(bx1, by1, bx2, by2, fill=color, outline='white', width=1, tags='overlay_item')
+                c.tag_lower(bg_item, t_item)
+                self.label_hit_boxes.append({
+                    'rect': (bx1 + ox, by1 + oy, bx2 + ox, by2 + oy),
+                    'target_info': target_info
+                })
+
+        mode = self.gui.mode_var.get()
+
+        # 1. 切磋按鈕 (依當前模式呈現)
+        if mode == 'attack':
+            if self.edit_coords.get('spar_attack'):
+                pt = self.edit_coords['spar_attack']
+                draw_pin(pt[0], pt[1], "① 進攻切磋", "#D32F2F", {'type': 'key', 'key': 'spar_attack', 'name': '進攻切磋'}, shape='circle', radius=16)
+        else:
+            spar_pt = self.edit_coords.get('spar_defense') or self.edit_coords.get('spar')
+            if spar_pt:
+                k = 'spar_defense' if self.edit_coords.get('spar_defense') else 'spar'
+                draw_pin(spar_pt[0], spar_pt[1], "① 防守切磋", "#2196F3", {'type': 'key', 'key': k, 'name': '防守切磋'}, shape='circle', radius=16)
+
+        # 2. 進攻專屬按鈕 (挑戰 & 自動隊列 & 8格狼槽)
+        if mode == 'attack':
+            if self.edit_coords.get('attack_challenge'):
+                pt = self.edit_coords['attack_challenge']
+                draw_pin(pt[0], pt[1], "⚔️ 挑戰按鈕", "#FF5722", {'type': 'key', 'key': 'attack_challenge', 'name': '挑戰按鈕'}, shape='rect', radius=15)
+
+            if self.edit_coords.get('auto_queue'):
+                pt = self.edit_coords['auto_queue']
+                draw_pin(pt[0], pt[1], "🐺 自動隊列", "#E65100", {'type': 'key', 'key': 'auto_queue', 'name': '自動隊列'}, shape='rect', radius=15)
+
+            wolf_slots = self.edit_coords.get('wolf_slots') or []
+            if wolf_slots:
+                pts_screen = [(p[0] - ox, p[1] - oy) for p in wolf_slots]
+                if len(pts_screen) >= 2:
+                    c.create_line(pts_screen[0][0], pts_screen[0][1], pts_screen[-1][0], pts_screen[-1][1], fill='#7E57C2', dash=(4, 4), width=2, tags='overlay_item')
+                for w_idx, pt in enumerate(wolf_slots, start=1):
+                    rx, ry = pt[0] - ox, pt[1] - oy
+                    c.create_oval(rx - 10, ry - 10, rx + 10, ry + 10, outline='#5C6BC0', width=2, tags='overlay_item')
+                    c.create_oval(rx - 3, ry - 3, rx + 3, ry + 3, fill='#5C6BC0', outline='white', width=1, tags='overlay_item')
+                    w_item = c.create_text(rx, ry - 16, text=f"狼{w_idx}", fill='#FFD54F', font=('Microsoft JhengHei', 9, 'bold'), tags='overlay_item')
+                    w_bbox = c.bbox(w_item)
+                    if w_bbox:
+                        self.label_hit_boxes.append({
+                            'rect': (w_bbox[0] + ox - 4, w_bbox[1] + oy - 2, w_bbox[2] + ox + 4, w_bbox[3] + oy + 2),
+                            'target_info': {'type': 'wolf_slot', 'idx': w_idx - 1, 'name': f'狼槽 {w_idx}'}
+                        })
+
+        # 3. 開始戰鬥按鈕
+        if self.edit_coords.get('start_battle'):
+            pt = self.edit_coords['start_battle']
+            draw_pin(pt[0], pt[1], "② 開始戰鬥", "#2E7D32", {'type': 'key', 'key': 'start_battle', 'name': '開始戰鬥'}, shape='rect', radius=16)
+
+        # 4. 抽獎卡片
+        if self.edit_coords.get('draw'):
+            pt = self.edit_coords['draw']
+            draw_pin(pt[0], pt[1], "④ 抽獎卡片", "#9C27B0", {'type': 'key', 'key': 'draw', 'name': '抽獎卡片'}, shape='rect', radius=18)
+
+        # 5. 確定按鈕
+        if self.edit_coords.get('confirm'):
+            pt = self.edit_coords['confirm']
+            draw_pin(pt[0], pt[1], "⑤ 確定按鈕", "#009688", {'type': 'key', 'key': 'confirm', 'name': '確定按鈕'}, shape='rect', radius=16)
+
+    def on_hover(self, event):
+        mx, my = event.x, event.y
+        gx = mx + self.left
+        gy = my + self.top
+
+        for item in getattr(self, 'label_hit_boxes', []):
+            lx1, ly1, lx2, ly2 = item['rect']
+            if lx1 <= gx <= lx2 and ly1 <= gy <= ly2:
+                self.canvas.config(cursor='fleur')
+                return
+
+        for k, pt in self.edit_coords.items():
+            if k == 'wolf_slots':
+                for wpt in (pt or []):
+                    if (gx - wpt[0]) ** 2 + (gy - wpt[1]) ** 2 <= 16 ** 2:
+                        self.canvas.config(cursor='fleur')
+                        return
+            elif pt:
+                if (gx - pt[0]) ** 2 + (gy - pt[1]) ** 2 <= 20 ** 2:
+                    self.canvas.config(cursor='fleur')
+                    return
+
+        self.canvas.config(cursor='')
+
+    def on_press(self, event):
+        mx, my = event.x, event.y
+        gx = mx + self.left
+        gy = my + self.top
+        self.press_mx = mx
+        self.press_my = my
+
+        # 1. 檢測標籤底框點擊
+        for item in getattr(self, 'label_hit_boxes', []):
+            lx1, ly1, lx2, ly2 = item['rect']
+            if lx1 <= gx <= lx2 and ly1 <= gy <= ly2:
+                tinfo = item['target_info']
+                if tinfo['type'] == 'key':
+                    k = tinfo['key']
+                    self.drag_info = {'type': 'key', 'key': k, 'start_pt': list(self.edit_coords[k]), 'name': tinfo['name']}
+                    self.status_lbl.config(text=f"🎯 正在移動【{tinfo['name']}】座標...", fg="#FFEB3B")
+                    return
+                elif tinfo['type'] == 'wolf_slot':
+                    idx = tinfo['idx']
+                    self.drag_info = {'type': 'wolf_slot', 'idx': idx, 'start_pt': list(self.edit_coords['wolf_slots'][idx]), 'name': tinfo['name']}
+                    self.status_lbl.config(text=f"🐺 正在移動【{tinfo['name']}】座標...", fg="#FFEB3B")
+                    return
+
+        # 2. 檢測圖示本體
+        for k, pt in self.edit_coords.items():
+            if k == 'wolf_slots':
+                for idx, wpt in enumerate(pt or []):
+                    if (gx - wpt[0]) ** 2 + (gy - wpt[1]) ** 2 <= 18 ** 2:
+                        self.drag_info = {'type': 'wolf_slot', 'idx': idx, 'start_pt': list(wpt), 'name': f'狼槽 {idx+1}'}
+                        self.status_lbl.config(text=f"🐺 正在移動【狼槽 {idx+1}】座標...", fg="#FFEB3B")
+                        return
+            elif pt:
+                if (gx - pt[0]) ** 2 + (gy - pt[1]) ** 2 <= 24 ** 2:
+                    name = k
+                    if k in ('spar_defense', 'spar'): name = '防守切磋'
+                    elif k == 'spar_attack': name = '進攻切磋'
+                    elif k == 'attack_challenge': name = '挑戰按鈕'
+                    elif k == 'auto_queue': name = '自動隊列'
+                    elif k == 'start_battle': name = '開始戰鬥'
+                    elif k == 'draw': name = '抽獎卡片'
+                    elif k == 'confirm': name = '確定按鈕'
+                    self.drag_info = {'type': 'key', 'key': k, 'start_pt': list(pt), 'name': name}
+                    self.status_lbl.config(text=f"🎯 正在移動【{name}】座標...", fg="#FFEB3B")
+                    return
+
+        self.drag_info = None
+
+    def on_motion(self, event):
+        if not self.drag_info:
+            return
+
+        dx = event.x - self.press_mx
+        dy = event.y - self.press_my
+        sp = self.drag_info['start_pt']
+        new_x = sp[0] + dx
+        new_y = sp[1] + dy
+
+        if self.drag_info['type'] == 'key':
+            k = self.drag_info['key']
+            self.edit_coords[k] = [new_x, new_y]
+            self.status_lbl.config(text=f"🎯 【{self.drag_info['name']}】新座標: ({new_x}, {new_y})")
+        elif self.drag_info['type'] == 'wolf_slot':
+            idx = self.drag_info['idx']
+            self.edit_coords['wolf_slots'][idx] = [new_x, new_y]
+            self.status_lbl.config(text=f"🐺 【{self.drag_info['name']}】新座標: ({new_x}, {new_y})")
+
+        self.draw_overlay()
+
+    def on_release(self, event):
+        if self.drag_info:
+            self.drag_info = None
+            self.status_lbl.config(text="✔ 座標已即時微調！確認滿意後請點擊【💾 儲存並套用】", fg="#76FF03")
+
+    def save_and_apply(self):
+        for k, v in self.edit_coords.items():
+            if k == 'wolf_slots':
+                self.gui.coords[k] = [tuple(pt) for pt in (v or [])]
+            elif v:
+                self.gui.coords[k] = tuple(v)
+            else:
+                self.gui.coords[k] = None
+
+        self.gui.update_coord_labels()
+        self.gui.save_config()
+        self.gui.auto.log("✔ [視覺化校正] 座標已透過螢幕拖曳成功更新並保存至 arena_config.json！")
+        self.status_lbl.config(text="✅ 成功儲存！所有座標已更新並保存至 arena_config.json！", fg="#76FF03")
+
+    def reset_coords(self):
+        for k, v in self.orig_coords.items():
+            if k == 'wolf_slots':
+                self.edit_coords[k] = [list(pt) for pt in (v or [])]
+            elif v:
+                self.edit_coords[k] = list(v)
+            else:
+                self.edit_coords[k] = None
+        self.draw_overlay()
+        self.status_lbl.config(text="🔄 已還原至開啟時的原始座標", fg="#FFEB3B")
+
+    def destroy(self):
+        if hasattr(self.gui, 'screen_overlay') and self.gui.screen_overlay is self:
+            self.gui.screen_overlay = None
+        super().destroy()
 
 
 def main():

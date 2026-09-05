@@ -27,36 +27,36 @@
   ],
   "wolf_coords": [
     [
-      2805,
-      445
+      2812,
+      460
     ],
     [
-      2831,
-      445
+      2838,
+      460
     ],
     [
-      2856,
-      445
+      2863,
+      460
     ],
     [
-      2882,
-      445
+      2889,
+      460
     ],
     [
-      2805,
-      459
+      2812,
+      474
     ],
     [
-      2831,
-      459
+      2838,
+      474
     ],
     [
-      2856,
-      459
+      2863,
+      474
     ],
     [
-      2882,
-      459
+      2889,
+      474
     ]
   ],
   "next_page_coord": [
@@ -71,7 +71,7 @@
     2509,
     576
   ],
-  "load_delay": "2",
+  "load_delay": "3",
   "wolf_cols": "4",
   "wolf_rows": "2",
   "wolf_click_count": "8",
@@ -79,12 +79,12 @@
   "interval": "0.1",
   "page_delay": "1.0",
   "max_pages": "20",
-  "mine_delay": "1",
+  "mine_delay": "1.5",
   "confirm_delay": "0.5",
   "threshold": "80",
   "skip_friend_idx": "0",
   "wolf_var": true,
-  "mining_var": false,
+  "mining_var": true,
   "auto_page_var": true,
   "stop_on_invite_var": true,
   "topmost": true,
