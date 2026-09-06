@@ -315,26 +315,26 @@ class FriendPatrolAutomation:
         return False
 
     def check_mine_limit_popup(self, screenshot=None):
-        """專門檢查是否出現『你今天已經幫助很多好友了』上限彈窗"""
+        """專門檢查是否出現『你今天已經幫助很多好友了』上限彈窗 (必須明確辨識到上限文字)"""
         if screenshot is None:
             screenshot = self.capture_screen()
         if screenshot is None:
             return None
 
-        # 1. 檢查上限文字標籤 (如：幫助很多好友了)
-        pos_txt, val_txt, _ = self.find_image_multiscale(['shangxian_short.png', 'shangxian_text.png'], screenshot)
-        # 2. 檢查橘黃色確定按鈕
-        pos_btn, val_btn, _ = self.find_image_multiscale(['queding_orange.png'], screenshot)
+        # 1. 必須明確檢測到上限文字標籤 (如：幫助很多好友了)
+        pos_txt, val_txt, _ = self.find_image_multiscale(['shangxian_short.png', 'shangxian_text.png'], screenshot, scales=(0.85, 1.0, 1.15))
+        if not pos_txt:
+            return None
 
-        if pos_txt or pos_btn:
-            if pos_btn:
-                cx = pos_btn[0] + self.monitor_offset_x
-                cy = pos_btn[1] + self.monitor_offset_y
-            else:
-                cx = pos_txt[0] + self.monitor_offset_x
-                cy = pos_txt[1] + self.monitor_offset_y + 135
-            return (cx, cy)
-        return None
+        # 2. 確定有上限文字後，才定位彈窗的確定按鈕以供關閉
+        pos_btn, val_btn, _ = self.find_image_multiscale(['queding_orange.png'], screenshot, scales=(0.85, 1.0, 1.15))
+        if pos_btn:
+            cx = pos_btn[0] + self.monitor_offset_x
+            cy = pos_btn[1] + self.monitor_offset_y
+        else:
+            cx = pos_txt[0] + self.monitor_offset_x
+            cy = pos_txt[1] + self.monitor_offset_y + 135
+        return (cx, cy)
 
     def handle_confirm_popup(self, stage_name=""):
         """處理確定彈窗：優先檢查加速礦上限彈窗，再點擊手動指定座標，並以視覺辨識補刀"""
@@ -342,6 +342,27 @@ class FriendPatrolAutomation:
             c_delay = float(self.gui.confirm_delay_var.get())
         except Exception:
             c_delay = 0.2
+
+        # 敲狼完畢階段：不需檢查挖礦上限彈窗，直接秒點指定確定座標 (或輕量辨識確定按鈕)
+        if stage_name == '敲狼完畢':
+            if getattr(self.gui, 'confirm_coord', None):
+                cx, cy = self.gui.confirm_coord
+                pyautogui.leftClick(cx, cy)
+                self.log(f'✔ [敲狼完畢] 點擊指定確定座標: ({cx}, {cy}) (等待 {c_delay}s)')
+                time.sleep(c_delay)
+                return True
+            else:
+                shot = self.capture_screen()
+                if shot is not None:
+                    pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot, scales=(0.9, 1.0, 1.1))
+                    if pos:
+                        click_x = pos[0] + self.monitor_offset_x
+                        click_y = pos[1] + self.monitor_offset_y
+                        pyautogui.leftClick(click_x, click_y)
+                        time.sleep(c_delay)
+                        self.log(f'✔ [敲狼完畢] 影像辨識點擊確定彈窗: ({click_x}, {click_y})')
+                        return True
+            return False
 
         # 1. 優先專項檢測：是否出現「今日已幫助很多好友了」上限彈窗 (特別是在點擊礦山後)
         shot = self.capture_screen()
@@ -365,8 +386,10 @@ class FriendPatrolAutomation:
             self.log(f'✔ [{stage_name}] 點擊指定確定座標: ({cx}, {cy}) (等待 {c_delay}s)')
             time.sleep(c_delay)
             clicked_fixed = True
+            # 已設定固定確定座標且已點擊，無須再花費數秒進行全螢幕多尺度補刀掃描
+            return True
 
-        # 3. 二次檢查/補刀：檢測畫面上是否仍殘留確定彈窗 (包含橘黃色與灰藍色確定按鈕)
+        # 3. 若未設定固定座標，則以影像辨識進行自動辨識與補刀 (包含橘黃色與灰藍色確定按鈕)
         shot2 = self.capture_screen()
         if shot2 is not None:
             limit_pos2 = self.check_mine_limit_popup(shot2)
@@ -379,7 +402,7 @@ class FriendPatrolAutomation:
                     self.log('🛑 [上限觸發] 偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊確定關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
                 return True
 
-            pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot2)
+            pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot2, scales=(0.85, 1.0, 1.15))
             if pos:
                 click_x = pos[0] + self.monitor_offset_x
                 click_y = pos[1] + self.monitor_offset_y
@@ -495,10 +518,6 @@ class FriendPatrolAutomation:
             load_delay = float(self.gui.load_delay_var.get())
             click_interval = float(self.gui.interval_var.get())
             wolf_after_delay = float(self.gui.wolf_delay_var.get())
-            try:
-                wolf_click_count = max(1, int(self.gui.wolf_click_count_var.get()))
-            except Exception:
-                wolf_click_count = len(self.gui.wolf_coords)
             page_delay = float(self.gui.page_delay_var.get())
             max_pages = int(self.gui.max_pages_var.get())
             mine_delay = float(self.gui.mine_delay_var.get())
@@ -510,7 +529,6 @@ class FriendPatrolAutomation:
             load_delay = 1.8
             click_interval = 0.12
             wolf_after_delay = 0.6
-            wolf_click_count = 6
             page_delay = 1.0
             max_pages = 10
             mine_delay = 0.4
@@ -535,9 +553,8 @@ class FriendPatrolAutomation:
             self.log('--------------------------------------------')
             skip_info = f"，跳過好友 #{','.join(map(str, sorted(skip_indices)))}" if skip_indices else ""
             self.log(f'開始執行: 好友數={len(self.gui.coordinates)}, 頁數={max_pages}{skip_info}')
-            if do_wolf:
-                target_coords = self.gui.wolf_coords[:wolf_click_count]
-                self.log(f'🐺 啟用範圍覆蓋敲狼: 點擊前 {len(target_coords)} 個熱點 (敲後等待 {wolf_after_delay}s)')
+            if do_wolf and self.gui.wolf_coords:
+                self.log(f'🐺 啟用範圍覆蓋敲狼: 點擊全部 {len(self.gui.wolf_coords)} 個熱點 (敲後等待 {wolf_after_delay}s)')
             self.log('--------------------------------------------')
 
             while self.running and current_page <= max_pages:
@@ -567,11 +584,10 @@ class FriendPatrolAutomation:
                         self.stop_patrol()
                         return
 
-                    # 1. 範圍覆蓋敲狼
+                    # 1. 範圍覆蓋敲狼 (點擊草地上所有已設定之熱點)
                     if do_wolf and self.gui.wolf_coords:
-                        target_coords = self.gui.wolf_coords[:wolf_click_count]
-                        self.log(f'🐺 執行草地範圍覆蓋敲狼 ({len(target_coords)} 個熱點)...')
-                        for wx, wy in target_coords:
+                        self.log(f'🐺 執行草地範圍覆蓋敲狼 ({len(self.gui.wolf_coords)} 個熱點)...')
+                        for wx, wy in self.gui.wolf_coords:
                             if not self.running:
                                 break
                             pyautogui.leftClick(wx, wy)
@@ -581,7 +597,7 @@ class FriendPatrolAutomation:
                         if wolf_after_delay > 0:
                             time.sleep(wolf_after_delay)
 
-                        # 敲完狼自動檢查並點擊「確定」彈窗
+                        # 敲完狼點擊確定彈窗 (優先秒點固定確定座標，不檢查挖礦上限)
                         self.handle_confirm_popup('敲狼完畢')
 
                     if not self.running:
@@ -633,6 +649,8 @@ class GUI:
         self.root.geometry('420x760')
         self.coordinates = []
         self.wolf_coords = []
+        self.wolf_box = None
+        self._loading_config = False
         self.next_page_coord = None
         self.mine_coord = None
         self.confirm_coord = None
@@ -648,8 +666,9 @@ class GUI:
 
         self.setup_ui()
         self.setup_global_hotkeys()
-        self.init_default_wolf_coords()
         self.load_config()
+        if not self.wolf_coords:
+            self.init_default_wolf_coords()
         if self.show_guide_var.get():
             self.root.after(600, self.show_guide_dialog)
 
@@ -798,11 +817,9 @@ class GUI:
         self.load_delay_var = tk.StringVar(value='1.8')
         tk.Entry(sf1, textvariable=self.load_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
-        tk.Label(sf1, text='②敲熱點數:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
-        self.wolf_click_count_var = tk.StringVar(value='6')
-        tk.Entry(sf1, textvariable=self.wolf_click_count_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
+        self.wolf_click_count_var = tk.StringVar(value='0')
 
-        tk.Label(sf1, text='點擊間隔:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
+        tk.Label(sf1, text='②敲狼間隔:', font=('Arial', 8)).pack(side='left', padx=(8, 0))
         self.interval_var = tk.StringVar(value='0.12')
         tk.Entry(sf1, textvariable=self.interval_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
 
@@ -866,6 +883,7 @@ class GUI:
         data = {
             'coordinates': self.coordinates,
             'wolf_coords': self.wolf_coords,
+            'wolf_box': getattr(self, 'wolf_box', None),
             'next_page_coord': self.next_page_coord,
             'mine_coord': self.mine_coord,
             'confirm_coord': self.confirm_coord,
@@ -902,6 +920,7 @@ class GUI:
         """啟動時載入上次保存的設定"""
         if not os.path.exists(CONFIG_FILE):
             return
+        self._loading_config = True
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -909,6 +928,8 @@ class GUI:
             self.coordinates = [tuple(pt) for pt in data.get('coordinates', [])]
             if 'wolf_coords' in data and data['wolf_coords']:
                 self.wolf_coords = [tuple(pt) for pt in data['wolf_coords']]
+            if data.get('wolf_box'):
+                self.wolf_box = list(data['wolf_box'])
             if data.get('next_page_coord'):
                 self.next_page_coord = tuple(data['next_page_coord'])
             if data.get('mine_coord'):
@@ -956,6 +977,8 @@ class GUI:
             self.auto.log(f'📂 已自動載入上次配置: 好友 {len(self.coordinates)} 位 | 敲狼點 {len(self.wolf_coords)} 個')
         except Exception as e:
             self.auto.log(f'載入配置失敗: {e}')
+        finally:
+            self._loading_config = False
 
     def setup_global_hotkeys(self):
         def on_press(key):
@@ -1128,6 +1151,14 @@ class GUI:
 
     def update_grid_from_existing_bounds(self):
         """根據現有草地範圍自動依新欄x列重新計算網格點"""
+        if getattr(self, '_loading_config', False):
+            return
+        # 優先使用完整儲存之草地真實邊界
+        if getattr(self, 'wolf_box', None) and len(self.wolf_box) == 4:
+            bx1, by1, bx2, by2 = self.wolf_box
+            self.generate_wolf_grid((bx1, by1), (bx2, by2))
+            return
+
         if not self.wolf_coords or len(self.wolf_coords) < 2:
             return
         try:
@@ -1137,7 +1168,23 @@ class GUI:
             max_y = max(pt[1] for pt in self.wolf_coords)
             if max_x - min_x < 10 or max_y - min_y < 10:
                 return
-            self.generate_wolf_grid((min_x, min_y), (max_x, max_y))
+
+            try:
+                cols = max(1, int(self.wolf_cols_var.get()))
+                rows = max(1, int(self.wolf_rows_var.get()))
+            except Exception:
+                cols, rows = 3, 2
+
+            # 熱點為各子格子中心，反推草地真實外框 (向外延伸半個單元格)，絕不縮水
+            cell_w = (max_x - min_x) / (cols - 1) if cols > 1 and max_x > min_x else 60
+            cell_h = (max_y - min_y) / (rows - 1) if rows > 1 and max_y > min_y else 50
+            bx1 = int(min_x - cell_w * 0.5)
+            by1 = int(min_y - cell_h * 0.5)
+            bx2 = int(max_x + cell_w * 0.5)
+            by2 = int(max_y + cell_h * 0.5)
+
+            self.wolf_box = [bx1, by1, bx2, by2]
+            self.generate_wolf_grid((bx1, by1), (bx2, by2), cols, rows)
         except Exception:
             pass
 
@@ -1153,6 +1200,7 @@ class GUI:
         self.wolf_coords.clear()
         min_x, max_x = min(p1[0], p2[0]), max(p1[0], p2[0])
         min_y, max_y = min(p1[1], p2[1]), max(p1[1], p2[1])
+        self.wolf_box = [min_x, min_y, max_x, max_y]
 
         for r in range(rows):
             for c in range(cols):
@@ -1877,6 +1925,8 @@ class ScreenOverlayDialog(tk.Toplevel):
         """將目前調整後的座標寫回 GUI 並持久化至 config.json"""
         self.gui.coordinates = [tuple(pt) for pt in self.edit_coordinates]
         self.gui.wolf_coords = [tuple(pt) for pt in self.edit_wolf_coords]
+        if getattr(self, 'wolf_box', None):
+            self.gui.wolf_box = list(self.wolf_box)
         if self.edit_mine_coord:
             self.gui.mine_coord = tuple(self.edit_mine_coord)
         if self.edit_next_page_coord:
