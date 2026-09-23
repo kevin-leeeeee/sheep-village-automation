@@ -2,6 +2,8 @@
 import sys
 import os
 import ctypes
+from ctypes import wintypes
+import win32api
 
 # 啟用 Windows DPI 自適應，防止螢幕縮放時滑鼠點偏
 # 注意：此宣告必須在 import pyautogui 之前，否則 pyautogui 載入時解析度會初始化錯誤！
@@ -30,6 +32,28 @@ IMAGE_DIR = os.path.join(BASE_DIR, 'images')
 
 def get_image_path(filename):
     return os.path.join(IMAGE_DIR, filename)
+
+def center_window_on_cursor(root, width, height):
+    """將視窗置中顯示在啟動時滑鼠游標所在的螢幕"""
+    try:
+        monitors = win32api.EnumDisplayMonitors()
+        pt = wintypes.POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            px, py = pt.x, pt.y
+        else:
+            px, py = 0, 0
+        for hMonitor, _, _ in monitors:
+            m_info = win32api.GetMonitorInfo(hMonitor)
+            m_rect = m_info['Monitor']
+            if m_rect[0] <= px <= m_rect[2] and m_rect[1] <= py <= m_rect[3]:
+                work = m_info.get('Work', m_rect)
+                spawn_x = work[0] + max(0, (work[2] - work[0] - width) // 2)
+                spawn_y = work[1] + max(0, (work[3] - work[1] - height) // 2)
+                root.geometry(f"{width}x{height}+{spawn_x}+{spawn_y}")
+                return
+    except Exception:
+        pass
+    root.geometry(f"{width}x{height}")
 
 class TowerAutomation:
     """自动化功能"""
@@ -368,7 +392,7 @@ class GUI:
         self.root = root
         admin_status = "【管理员】" if is_admin() else "【普通用户】"
         self.root.title(f"该脚本由“鹏小白是我”分享-升塔&打怪 {admin_status}")
-        self.root.geometry('350x640')
+        center_window_on_cursor(self.root, 350, 640)
         self.coordinates = []
         self.screenshot_area = None
         self.capturing = False

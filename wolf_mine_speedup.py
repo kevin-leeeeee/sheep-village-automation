@@ -49,6 +49,28 @@ CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 def get_image_path(filename):
     return os.path.join(IMAGE_DIR, filename)
 
+def center_window_on_cursor(root, width, height):
+    """將視窗置中顯示在啟動時滑鼠游標所在的螢幕"""
+    try:
+        monitors = win32api.EnumDisplayMonitors()
+        pt = wintypes.POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            px, py = pt.x, pt.y
+        else:
+            px, py = 0, 0
+        for hMonitor, _, _ in monitors:
+            m_info = win32api.GetMonitorInfo(hMonitor)
+            m_rect = m_info['Monitor']
+            if m_rect[0] <= px <= m_rect[2] and m_rect[1] <= py <= m_rect[3]:
+                work = m_info.get('Work', m_rect)
+                spawn_x = work[0] + max(0, (work[2] - work[0] - width) // 2)
+                spawn_y = work[1] + max(0, (work[3] - work[1] - height) // 2)
+                root.geometry(f"{width}x{height}+{spawn_x}+{spawn_y}")
+                return
+    except Exception:
+        pass
+    root.geometry(f"{width}x{height}")
+
 def is_admin():
     """檢查是否具有管理員權限"""
     try:
@@ -74,6 +96,8 @@ class FriendPatrolAutomation:
     def __init__(self, gui):
         self.gui = gui
         self.running = False
+        self.skip_current_friend = False
+        self.go_prev_friend = False
         self.default_delay = 0.5
         self.detected_monitor_name = None
         self.monitor_offset_x = 0
@@ -229,6 +253,8 @@ class FriendPatrolAutomation:
             return
         self.gui.save_config()
         self.running = True
+        self.skip_current_friend = False
+        self.go_prev_friend = False
         self.gui.start_btn.config(state='disabled')
         self.gui.stop_btn.config(state='normal')
         self.log('敲狼加速礦已啟動')
@@ -236,19 +262,24 @@ class FriendPatrolAutomation:
 
     def stop_patrol(self):
         self.running = False
+        self.skip_current_friend = False
+        self.go_prev_friend = False
         self.gui.start_btn.config(state='normal')
         self.gui.stop_btn.config(state='disabled')
         self.log('敲狼加速礦已停止')
 
-    def find_image_multiscale(self, template_filenames, screenshot, scales=(0.5, 0.65, 0.75, 0.85, 0.95, 1.0, 1.05, 1.15, 1.25, 1.4, 1.6, 1.8, 2.0), use_gray=True):
+    def find_image_multiscale(self, template_filenames, screenshot, scales=(0.5, 0.65, 0.75, 0.85, 0.95, 1.0, 1.05, 1.15, 1.25, 1.4, 1.6, 1.8, 2.0), use_gray=True, min_threshold=None):
         """支援多圖片、廣域多尺度與灰階匹配，完美適應跨裝置不同解析度與 DPI 縮放"""
         if screenshot is None:
             return None, 0, (0, 0)
 
-        try:
-            threshold = float(self.gui.threshold_var.get()) / 100.0
-        except Exception:
-            threshold = 0.70
+        if min_threshold is not None:
+            threshold = float(min_threshold)
+        else:
+            try:
+                threshold = float(self.gui.threshold_var.get()) / 100.0
+            except Exception:
+                threshold = 0.70
         best_val = -1
         best_loc = None
         best_size = (0, 0)
@@ -322,63 +353,40 @@ class FriendPatrolAutomation:
             return None
 
         # 1. 必須明確檢測到上限文字標籤 (如：幫助很多好友了)
-        pos_txt, val_txt, _ = self.find_image_multiscale(['shangxian_short.png', 'shangxian_text.png'], screenshot, scales=(0.85, 1.0, 1.15))
+        pos_txt, val_txt, _ = self.find_image_multiscale(
+            ['shangxian_short.png', 'shangxian_text.png'], 
+            screenshot, 
+            scales=(0.85, 1.0, 1.15)
+        )
         if not pos_txt:
             return None
 
+        self.log(f'🔍 辨識到「幫助很多好友」上限文字！(信心度: {val_txt*100:.1f}%)')
+
         # 2. 確定有上限文字後，才定位彈窗的確定按鈕以供關閉
-        pos_btn, val_btn, _ = self.find_image_multiscale(['queding_orange.png'], screenshot, scales=(0.85, 1.0, 1.15))
+        pos_btn, val_btn, _ = self.find_image_multiscale(
+            ['queding_orange.png'], 
+            screenshot, 
+            scales=(0.85, 1.0, 1.15)
+        )
         if pos_btn:
             cx = pos_btn[0] + self.monitor_offset_x
             cy = pos_btn[1] + self.monitor_offset_y
+        elif getattr(self.gui, 'confirm_coord', None):
+            cx, cy = self.gui.confirm_coord
         else:
             cx = pos_txt[0] + self.monitor_offset_x
             cy = pos_txt[1] + self.monitor_offset_y + 135
         return (cx, cy)
 
     def handle_confirm_popup(self, stage_name=""):
-        """處理確定彈窗：優先檢查加速礦上限彈窗，再點擊手動指定座標，並以視覺辨識補刀"""
+        """處理確定彈窗：點擊確定後，專門檢查是否出現加速礦上限彈窗"""
         try:
             c_delay = float(self.gui.confirm_delay_var.get())
         except Exception:
             c_delay = 0.2
 
-        # 敲狼完畢階段：不需檢查挖礦上限彈窗，直接秒點指定確定座標 (或輕量辨識確定按鈕)
-        if stage_name == '敲狼完畢':
-            if getattr(self.gui, 'confirm_coord', None):
-                cx, cy = self.gui.confirm_coord
-                pyautogui.leftClick(cx, cy)
-                self.log(f'✔ [敲狼完畢] 點擊指定確定座標: ({cx}, {cy}) (等待 {c_delay}s)')
-                time.sleep(c_delay)
-                return True
-            else:
-                shot = self.capture_screen()
-                if shot is not None:
-                    pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot, scales=(0.9, 1.0, 1.1))
-                    if pos:
-                        click_x = pos[0] + self.monitor_offset_x
-                        click_y = pos[1] + self.monitor_offset_y
-                        pyautogui.leftClick(click_x, click_y)
-                        time.sleep(c_delay)
-                        self.log(f'✔ [敲狼完畢] 影像辨識點擊確定彈窗: ({click_x}, {click_y})')
-                        return True
-            return False
-
-        # 1. 優先專項檢測：是否出現「今日已幫助很多好友了」上限彈窗 (特別是在點擊礦山後)
-        shot = self.capture_screen()
-        limit_pos = self.check_mine_limit_popup(shot)
-        if limit_pos:
-            lx, ly = limit_pos
-            pyautogui.leftClick(lx, ly)
-            time.sleep(c_delay + 0.2)
-            if self.gui.mining_var.get():
-                self.gui.mining_var.set(False)
-                self.log('🛑 [上限觸發] 偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊確定關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
-            else:
-                self.log(f'🛑 偵測到上限特殊彈窗！已點擊確定關閉: ({lx}, {ly})')
-            return True
-
-        # 2. 點擊手動指定確定座標
+        # 1. 優先執行當前步驟的點擊確定操作
         clicked_fixed = False
         if getattr(self.gui, 'confirm_coord', None):
             cx, cy = self.gui.confirm_coord
@@ -386,30 +394,36 @@ class FriendPatrolAutomation:
             self.log(f'✔ [{stage_name}] 點擊指定確定座標: ({cx}, {cy}) (等待 {c_delay}s)')
             time.sleep(c_delay)
             clicked_fixed = True
-            # 已設定固定確定座標且已點擊，無須再花費數秒進行全螢幕多尺度補刀掃描
+        else:
+            shot = self.capture_screen()
+            if shot is not None:
+                pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot, scales=(0.85, 1.0, 1.15))
+                if pos:
+                    click_x = pos[0] + self.monitor_offset_x
+                    click_y = pos[1] + self.monitor_offset_y
+                    pyautogui.leftClick(click_x, click_y)
+                    time.sleep(c_delay)
+                    self.log(f'✔ [{stage_name}] 影像辨識點擊確定彈窗: ({click_x}, {click_y})')
+                    clicked_fixed = True
+
+        # 敲狼階段不需要檢查上限彈窗，直接返回
+        if stage_name == '敲狼完畢':
+            return clicked_fixed
+
+        # 2. 礦山階段專屬（依使用者需求：點擊確定後才檢查上限彈窗）
+        time.sleep(0.4)  # 等待伺服器回應與彈窗跳出
+        shot_after = self.capture_screen()
+        limit_pos = self.check_mine_limit_popup(shot_after)
+        if limit_pos:
+            lx, ly = limit_pos
+            pyautogui.leftClick(lx, ly)
+            time.sleep(c_delay + 0.2)
+            if self.gui.mining_var.get():
+                self.gui.mining_var.set(False)
+                self.log('🛑 [上限觸發] 點擊確定後偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
+            else:
+                self.log(f'🛑 點擊確定後偵測到上限特殊彈窗！已點擊關閉: ({lx}, {ly})')
             return True
-
-        # 3. 若未設定固定座標，則以影像辨識進行自動辨識與補刀 (包含橘黃色與灰藍色確定按鈕)
-        shot2 = self.capture_screen()
-        if shot2 is not None:
-            limit_pos2 = self.check_mine_limit_popup(shot2)
-            if limit_pos2:
-                lx, ly = limit_pos2
-                pyautogui.leftClick(lx, ly)
-                time.sleep(c_delay)
-                if self.gui.mining_var.get():
-                    self.gui.mining_var.set(False)
-                    self.log('🛑 [上限觸發] 偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊確定關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
-                return True
-
-            pos, val, _ = self.find_image_multiscale(['queding_orange.png', 'queding.png'], shot2, scales=(0.85, 1.0, 1.15))
-            if pos:
-                click_x = pos[0] + self.monitor_offset_x
-                click_y = pos[1] + self.monitor_offset_y
-                pyautogui.leftClick(click_x, click_y)
-                time.sleep(c_delay)
-                self.log(f'✔ [{stage_name}] 影像辨識補點確定彈窗: ({click_x}, {click_y})')
-                return True
 
         return clicked_fixed
 
@@ -513,6 +527,42 @@ class FriendPatrolAutomation:
 
         return False
 
+    def interruptible_sleep(self, duration):
+        """可被手動跳過、返回上一步或停止打斷的 sleep"""
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            if not self.running or self.skip_current_friend or getattr(self, 'go_prev_friend', False):
+                return False
+            time.sleep(0.05)
+        return True
+
+    def parse_skip_rules(self, raw_str, per_page):
+        """
+        解析跳過好友規則字串 (僅保留全域序號)。
+        """
+        import re
+        skip_global = set()
+        desc_list = []
+
+        if not raw_str:
+            return skip_global, desc_list
+
+        delimiters = r'[,，、;\s]+'
+        tokens = [t.strip() for t in re.split(delimiters, raw_str) if t.strip()]
+
+        for token in tokens:
+            if token.isdigit():
+                val = int(token)
+                skip_global.add(val)
+                if per_page > 0:
+                    p = (val - 1) // per_page + 1
+                    s = (val - 1) % per_page + 1
+                    desc_list.append(f"#{val}(第{p}頁第{s}位)")
+                else:
+                    desc_list.append(f"#{val}")
+
+        return skip_global, desc_list
+
     def patrol_loop(self):
         try:
             load_delay = float(self.gui.load_delay_var.get())
@@ -541,18 +591,16 @@ class FriendPatrolAutomation:
             total_mining = 0
             total_friends = 0
 
-            # 解析要跳過的好友序號 (如: "1" 或 "1, 2")
-            skip_indices = set()
-            raw_skip = str(self.gui.skip_friend_idx_var.get()).strip()
-            if raw_skip:
-                for part in raw_skip.replace('，', ',').replace('、', ',').split(','):
-                    part = part.strip()
-                    if part.isdigit():
-                        skip_indices.add(int(part))
+            # 解析跳過好友規則 (僅支援全域序號)
+            per_page = len(self.gui.coordinates)
+            skip_global, skip_descs = self.parse_skip_rules(
+                str(self.gui.skip_friend_idx_var.get()).strip(),
+                per_page
+            )
 
             self.log('--------------------------------------------')
-            skip_info = f"，跳過好友 #{','.join(map(str, sorted(skip_indices)))}" if skip_indices else ""
-            self.log(f'開始執行: 好友數={len(self.gui.coordinates)}, 頁數={max_pages}{skip_info}')
+            skip_info = f"，預設跳過: {', '.join(skip_descs)}" if skip_descs else ""
+            self.log(f'開始執行: 好友數={per_page}, 頁數={max_pages}{skip_info}')
             if do_wolf and self.gui.wolf_coords:
                 self.log(f'🐺 啟用範圍覆蓋敲狼: 點擊全部 {len(self.gui.wolf_coords)} 個熱點 (敲後等待 {wolf_after_delay}s)')
             self.log('--------------------------------------------')
@@ -560,24 +608,53 @@ class FriendPatrolAutomation:
             while self.running and current_page <= max_pages:
                 self.log(f'=== 第 {current_page} / {max_pages} 頁 ===')
 
-                for idx, coord in enumerate(self.gui.coordinates, start=1):
-                    if not self.running:
-                        break
+                def find_prev_valid_friend(start_idx):
+                    """往上尋找非跳過的好友，若遇到跳過好友則跳回上上一個"""
+                    target = start_idx - 1
+                    while target >= 0:
+                        g_idx = (current_page - 1) * per_page + (target + 1) if per_page > 0 else (target + 1)
+                        if g_idx not in skip_global:
+                            return target
+                        self.log(f'⏮ [避開跳過] 好友 #{g_idx} 在跳過名單中，跳回上一個好友...')
+                        target -= 1
+                    return 0
 
-                    # 判斷是否跳過該好友 (例如避免按到自己)
-                    if idx in skip_indices:
-                        self.log(f'⏭ [跳過] 第 {current_page} 頁好友 #{idx} (避免點擊自己)')
+                friend_idx = 0
+                num_coords = len(self.gui.coordinates)
+                while self.running and friend_idx < num_coords:
+                    idx = friend_idx + 1
+                    coord = self.gui.coordinates[friend_idx]
+                    self.skip_current_friend = False
+                    self.go_prev_friend = False
+
+                    global_idx = (current_page - 1) * per_page + idx if per_page > 0 else idx
+
+                    # 判斷是否設定跳過該好友 (全域編號)
+                    if global_idx in skip_global:
+                        self.log(f'⏭ [跳過] 好友 #{global_idx} (第 {current_page} 頁第 {idx} 位, 依設定跳過)')
+                        friend_idx += 1
                         continue
 
                     x, y = coord
                     pyautogui.leftClick(x, y)
-                    self.log(f'點擊好友 {idx} 座標: ({x}, {y})')
+                    self.log(f'點擊好友 #{global_idx} (第 {current_page} 頁第 {idx} 位) 座標: ({x}, {y})')
                     total_friends += 1
 
                     # 等待進入好友家園
-                    time.sleep(load_delay)
-                    if not self.running:
-                        break
+                    if not self.interruptible_sleep(load_delay):
+                        if self.go_prev_friend:
+                            friend_idx = find_prev_valid_friend(friend_idx)
+                            target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                            self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                            continue
+                        if self.skip_current_friend:
+                            self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                            friend_idx += 1
+                            continue
+                        if not self.running:
+                            break
+                        friend_idx += 1
+                        continue
 
                     # 檢查是否點到「邀請好友」彈窗
                     if self.check_invite_popup_and_stop():
@@ -588,20 +665,49 @@ class FriendPatrolAutomation:
                     if do_wolf and self.gui.wolf_coords:
                         self.log(f'🐺 執行草地範圍覆蓋敲狼 ({len(self.gui.wolf_coords)} 個熱點)...')
                         for wx, wy in self.gui.wolf_coords:
-                            if not self.running:
+                            if not self.running or self.skip_current_friend or self.go_prev_friend:
                                 break
                             pyautogui.leftClick(wx, wy)
-                            time.sleep(click_interval)
+                            if not self.interruptible_sleep(click_interval):
+                                break
+                        
+                        if self.go_prev_friend:
+                            friend_idx = find_prev_valid_friend(friend_idx)
+                            target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                            self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                            continue
+                        if self.skip_current_friend:
+                            self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                            friend_idx += 1
+                            continue
 
                         # 敲狼後等待設定的時間（③ 敲完等待）
                         if wolf_after_delay > 0:
-                            time.sleep(wolf_after_delay)
+                            if not self.interruptible_sleep(wolf_after_delay):
+                                if self.go_prev_friend:
+                                    friend_idx = find_prev_valid_friend(friend_idx)
+                                    target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                                    self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                                    continue
+                                if self.skip_current_friend:
+                                    self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                                    friend_idx += 1
+                                    continue
 
                         # 敲完狼點擊確定彈窗 (優先秒點固定確定座標，不檢查挖礦上限)
                         self.handle_confirm_popup('敲狼完畢')
 
                     if not self.running:
                         break
+                    if self.go_prev_friend:
+                        friend_idx = find_prev_valid_friend(friend_idx)
+                        target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                        self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                        continue
+                    if self.skip_current_friend:
+                        self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                        friend_idx += 1
+                        continue
 
                     # 2. 加速挖礦 (點擊指定礦山座標)
                     if self.gui.mining_var.get():
@@ -610,13 +716,33 @@ class FriendPatrolAutomation:
                             pyautogui.leftClick(mx, my)
                             self.log(f'⚡ 點擊指定礦山座標: ({mx}, {my})')
                             total_mining += 1
-                            time.sleep(mine_delay)
+                            if not self.interruptible_sleep(mine_delay):
+                                if self.go_prev_friend:
+                                    friend_idx = find_prev_valid_friend(friend_idx)
+                                    target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                                    self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                                    continue
+                                if self.skip_current_friend:
+                                    self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                                    friend_idx += 1
+                                    continue
                             # 點擊礦山後自動檢查並點擊「確定」彈窗
                             self.handle_confirm_popup('礦山點擊完畢')
                         else:
                             self.log('⚠ 挖礦加速已勾選但未設定「礦山座標」，請點擊「礦山座標(K鍵)」設定')
 
-                    time.sleep(0.2)
+                    if not self.interruptible_sleep(0.2):
+                        if self.go_prev_friend:
+                            friend_idx = find_prev_valid_friend(friend_idx)
+                            target_global = (current_page - 1) * per_page + (friend_idx + 1) if per_page > 0 else (friend_idx + 1)
+                            self.log(f'⏮ [手動返回] 退回好友 #{target_global} (第 {current_page} 頁第 {friend_idx + 1} 位) 重新執行')
+                            continue
+                        if self.skip_current_friend:
+                            self.log(f'⏭ [手動跳過] 已中斷當前好友 #{global_idx} 流程')
+                            friend_idx += 1
+                            continue
+
+                    friend_idx += 1
 
                 if not self.running:
                     break
@@ -646,7 +772,7 @@ class GUI:
         self.root = root
         admin_status = "【管理員】" if is_admin() else "【普通用戶】"
         self.root.title(f"保衛羊村 - 敲狼加速礦 {admin_status}")
-        self.root.geometry('420x760')
+        center_window_on_cursor(self.root, 420, 760)
         self.coordinates = []
         self.wolf_coords = []
         self.wolf_box = None
@@ -851,8 +977,8 @@ class GUI:
 
         tk.Label(sf3, text='跳過好友:', font=('Arial', 8)).pack(side='left', padx=(4, 0))
         self.skip_friend_idx_var = tk.StringVar(value='')
-        tk.Entry(sf3, textvariable=self.skip_friend_idx_var, width=4, font=('Arial', 8)).pack(side='left', padx=1)
-        tk.Label(sf3, text='(如: 1,2)', font=('Arial', 8), fg='gray').pack(side='left', padx=(1, 2))
+        tk.Entry(sf3, textvariable=self.skip_friend_idx_var, width=8, font=('Arial', 8)).pack(side='left', padx=1)
+        tk.Label(sf3, text='(如: 1, 56)', font=('Arial', 8), fg='gray').pack(side='left', padx=(1, 2))
 
         # 圖像匹配閾值 (%)
         threshold_frame = tk.LabelFrame(main, text='圖像匹配閾值 (%)', padx=5, pady=2)
@@ -876,7 +1002,7 @@ class GUI:
         bottom_f = tk.Frame(main)
         bottom_f.pack(fill='x', pady=2)
         tk.Button(bottom_f, text='清空日誌', command=self.clear_log, font=('Arial', 8)).pack(side='left')
-        tk.Label(bottom_f, text='按 F10 鍵可全域緊急停止', font=('Arial', 8), fg='gray').pack(side='right')
+        tk.Label(bottom_f, text='[←]上一個 | [→]下一個 | [F10]停止', font=('Arial', 8), fg='gray').pack(side='right')
 
     def save_config(self):
         """保存當前參數與座標至 config.json"""
@@ -959,8 +1085,9 @@ class GUI:
             if 'threshold' in data: self.threshold_var.set(str(data['threshold']))
             if 'skip_friend_idx' in data: self.skip_friend_idx_var.set(str(data['skip_friend_idx']))
 
-            if 'wolf_var' in data: self.wolf_var.set(bool(data['wolf_var']))
-            if 'mining_var' in data: self.mining_var.set(bool(data['mining_var']))
+            # 依需求：每次重新開啟預設「覆蓋敲狼」與「挖礦加速」皆打勾
+            self.wolf_var.set(True)
+            self.mining_var.set(True)
             if 'auto_page_var' in data: self.auto_page_var.set(bool(data['auto_page_var']))
             if 'stop_on_invite_var' in data: self.stop_on_invite_var.set(bool(data['stop_on_invite_var']))
             if 'show_guide' in data: self.show_guide_var.set(bool(data['show_guide']))
@@ -986,6 +1113,12 @@ class GUI:
                 if key == pynput.keyboard.Key.f10:
                     if self.auto.running:
                         self.root.after(0, self.auto.stop_patrol)
+                elif key == pynput.keyboard.Key.right:
+                    if self.auto.running:
+                        self.auto.skip_current_friend = True
+                elif key == pynput.keyboard.Key.left:
+                    if self.auto.running:
+                        self.auto.go_prev_friend = True
             except Exception:
                 pass
 

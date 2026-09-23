@@ -49,6 +49,28 @@ CONFIG_FILE = os.path.join(BASE_DIR, 'arena_config.json')
 def get_image_path(filename):
     return os.path.join(IMAGE_DIR, filename)
 
+def center_window_on_cursor(root, width, height):
+    """將視窗置中顯示在啟動時滑鼠游標所在的螢幕"""
+    try:
+        monitors = win32api.EnumDisplayMonitors()
+        pt = wintypes.POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            px, py = pt.x, pt.y
+        else:
+            px, py = 0, 0
+        for hMonitor, _, _ in monitors:
+            m_info = win32api.GetMonitorInfo(hMonitor)
+            m_rect = m_info['Monitor']
+            if m_rect[0] <= px <= m_rect[2] and m_rect[1] <= py <= m_rect[3]:
+                work = m_info.get('Work', m_rect)
+                spawn_x = work[0] + max(0, (work[2] - work[0] - width) // 2)
+                spawn_y = work[1] + max(0, (work[3] - work[1] - height) // 2)
+                root.geometry(f"{width}x{height}+{spawn_x}+{spawn_y}")
+                return
+    except Exception:
+        pass
+    root.geometry(f"{width}x{height}")
+
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
@@ -87,7 +109,7 @@ class ArenaDefenseAutomation:
             target_w, target_h = 0, 0
 
             # 依據已設定的切磋或戰鬥座標判定螢幕
-            pt = (self.gui.coords.get('spar_attack') if self.gui.mode_var.get() == 'attack' else None) or \
+            pt = self.gui.coords.get('spar_attack') or \
                  self.gui.coords.get('spar_defense') or \
                  self.gui.coords.get('spar') or \
                  self.gui.coords.get('start_battle')
@@ -231,24 +253,26 @@ class ArenaDefenseAutomation:
 
     def start(self):
         mode = self.gui.mode_var.get()
-        mode_title = "進攻模式" if mode == 'attack' else "防守模式"
+        requires_defense = mode in ('defense', 'attack_then_defense', 'defense_then_attack')
+        requires_attack = mode in ('attack', 'attack_then_defense', 'defense_then_attack')
 
-        # 檢查切磋座標
-        spar_pt = self.gui.get_current_spar_coord()
-        if not spar_pt:
-            self.log(f"❌ 錯誤: 請先設定【{mode_title}】的「切磋座標」！")
-            messagebox.showwarning("提示", f"請先設定【{mode_title}】的「切磋座標」！")
-            return
+        # 1. 檢查防守必要座標
+        if requires_defense:
+            spar_def = self.gui.coords.get('spar_defense') or self.gui.coords.get('spar')
+            if not spar_def:
+                self.log("❌ 錯誤: 請先設定「防守切磋座標」！")
+                messagebox.showwarning("提示", "請先設定「防守切磋座標」！")
+                return
 
-        if not self.gui.coords.get('start_battle'):
-            self.log("❌ 錯誤: 請先設定「開始戰鬥」座標！")
-            messagebox.showwarning("提示", "請先設定「開始戰鬥」座標！")
-            return
+        # 2. 檢查進攻必要座標
+        if requires_attack:
+            if not self.gui.coords.get('spar_attack'):
+                self.log("❌ 錯誤: 請先設定「進攻切磋座標」！")
+                messagebox.showwarning("提示", "請先設定「進攻切磋座標」！")
+                return
 
-        # 進攻模式專屬檢查
-        if mode == 'attack':
             if not self.gui.coords.get('attack_challenge'):
-                self.log("❌ 錯誤: 進攻模式尚未設定「挑戰按鈕座標」！")
+                self.log("❌ 錯誤: 進攻模式尚未設定「切磋後挑戰按鈕座標」！")
                 messagebox.showwarning("提示", "請先設定進攻專屬的「切磋後挑戰按鈕 (K鍵)」！")
                 return
 
@@ -264,6 +288,12 @@ class ArenaDefenseAutomation:
                     messagebox.showwarning("提示", "請點擊「兩點生成狼槽(1~8)」設定狼隻位置！")
                     return
 
+        # 3. 檢查開始戰鬥共用座標
+        if not self.gui.coords.get('start_battle'):
+            self.log("❌ 錯誤: 請先設定「開始戰鬥」座標！")
+            messagebox.showwarning("提示", "請先設定「開始戰鬥」座標！")
+            return
+
         if self.running:
             return
 
@@ -272,6 +302,14 @@ class ArenaDefenseAutomation:
         self.gui.start_btn.config(state='disabled')
         self.gui.stop_btn.config(state='normal')
         self.detected_monitor_name = None
+
+        mode_titles = {
+            'defense': '🛡️ 純防守模式',
+            'attack': '⚔️ 純進攻模式',
+            'attack_then_defense': '⚔️➔🛡️ 先攻後防模式',
+            'defense_then_attack': '🛡️➔⚔️ 先防後攻模式'
+        }
+        mode_title = mode_titles.get(mode, mode)
         self.log(f"🚀 競技場【{mode_title}】自動化已啟動")
         threading.Thread(target=self.run_loop, daemon=True).start()
 
@@ -337,10 +375,114 @@ class ArenaDefenseAutomation:
 
         return False
 
+    def execute_single_round(self, round_mode, r, total_r, params):
+        after_spar = params['after_spar']
+        initial_delay = params['initial_delay']
+        poll_interval = params['poll_interval']
+        max_timeout = params['max_timeout']
+        shuffle_delay = params['shuffle_delay']
+        after_draw = params['after_draw']
+        after_confirm = params['after_confirm']
+        dispatch_mode = params['dispatch_mode']
+        target_wolf_indices = params['target_wolf_indices']
+
+        mode_title = "⚔️ 進攻" if round_mode == 'attack' else "🛡️ 防守"
+        self.log("--------------------------------------------")
+        self.log(f"{mode_title} 【第 {r} / {total_r} 次挑戰開始】")
+
+        # 1. 點擊切磋按鈕
+        if round_mode == 'attack':
+            spar_pt = self.gui.coords.get('spar_attack')
+            spar_name = "進攻切磋按鈕"
+        else:
+            spar_pt = self.gui.coords.get('spar_defense') or self.gui.coords.get('spar')
+            spar_name = "防守切磋按鈕"
+
+        if not self.click_point(spar_name, spar_pt):
+            return False
+        if not self.sleep_interruptible(after_spar):
+            return False
+
+        # 2. 進攻模式專屬：點擊切磋後的「挑戰」按鈕進入出戰隊列
+        if round_mode == 'attack':
+            attack_challenge_pt = self.gui.coords.get('attack_challenge')
+            if attack_challenge_pt:
+                self.log("⚔️ 點擊切磋後的「挑戰」按鈕...")
+                if not self.click_point("挑戰按鈕", attack_challenge_pt):
+                    return False
+                if not self.sleep_interruptible(after_spar):
+                    return False
+            else:
+                self.log("⚠️ 未設定進攻挑戰按鈕座標，嘗試直接進入出戰隊列")
+
+            # 3. 派狼處理 (出戰隊列)
+            if dispatch_mode == 'auto':
+                auto_queue_pt = self.gui.coords.get('auto_queue')
+                self.log("🐺 點擊「自動隊列」填滿出戰狼隻...")
+                if auto_queue_pt and not self.click_point("自動隊列按鈕", auto_queue_pt):
+                    return False
+                time.sleep(0.5)
+            else:
+                wolf_slots = self.gui.coords.get('wolf_slots', [])
+                self.log(f"🐺 依序派出指定狼隻: {target_wolf_indices} ...")
+                for w_idx in target_wolf_indices:
+                    if not self.running:
+                        return False
+                    slot_pt = wolf_slots[w_idx - 1]
+                    self.log(f"👉 點擊第 {w_idx} 號狼槽: {slot_pt}")
+                    pyautogui.leftClick(slot_pt[0], slot_pt[1])
+                    time.sleep(0.3)
+                time.sleep(0.3)
+
+        # 4. 點擊開始戰鬥
+        start_pt = self.gui.coords.get('start_battle')
+        if not self.click_point("開始戰鬥", start_pt):
+            return False
+
+        # 5. 動態等待戰鬥結束 (自動針對遊戲螢幕辨識 勝利/失敗/抽獎)
+        if not self.wait_for_battle_end(initial_delay, poll_interval, max_timeout):
+            return False
+
+        # 6. 抽獎二段式流程：點擊卡片觸發洗牌 -> 等待洗牌動畫 -> 再次點擊卡片正式抽獎
+        draw_pt = self.gui.coords.get('draw')
+        if draw_pt:
+            time.sleep(0.5)
+            self.log("🎴 【抽獎步驟 1/2】點擊卡片觸發洗牌...")
+            if not self.click_point("抽獎卡片 (觸發洗牌)", draw_pt):
+                return False
+
+            self.log(f"⏳ 等待卡片洗牌動畫 ({shuffle_delay} 秒)...")
+            if not self.sleep_interruptible(shuffle_delay):
+                return False
+
+            self.log("🎴 【抽獎步驟 2/2】再次點擊卡片正式抽獎！")
+            if not self.click_point("抽獎卡片 (正式抽獎)", draw_pt):
+                return False
+        else:
+            self.log("ℹ️ 未設定抽獎卡片座標，跳過點擊")
+
+        if not self.sleep_interruptible(after_draw):
+            return False
+
+        # 7. 點擊確定按鈕
+        confirm_pt = self.gui.coords.get('confirm')
+        if confirm_pt:
+            if not self.click_point("確定按鈕", confirm_pt):
+                return False
+        else:
+            self.log("ℹ️ 未設定確定座標，跳過點擊")
+
+        if not self.sleep_interruptible(after_confirm):
+            return False
+
+        self.log(f"✔ 【{mode_title}】第 {r} 次挑戰結算完成！")
+        return True
+
     def run_loop(self):
         try:
             mode = self.gui.mode_var.get()
-            total_rounds = int(self.gui.rounds_var.get())
+            defense_rounds = int(self.gui.defense_rounds_var.get())
+            attack_rounds = int(self.gui.attack_rounds_var.get())
             after_spar = float(self.gui.spar_delay_var.get())
             initial_delay = float(self.gui.battle_initial_var.get())
             poll_interval = float(self.gui.battle_poll_var.get())
@@ -352,7 +494,8 @@ class ArenaDefenseAutomation:
         except Exception as e:
             self.log(f"⚠️ 參數讀取異常，採用預設值: {e}")
             mode = 'defense'
-            total_rounds = 10
+            defense_rounds = 10
+            attack_rounds = 5
             after_spar = 2.0
             initial_delay = 10.0
             poll_interval = 1.0
@@ -362,17 +505,9 @@ class ArenaDefenseAutomation:
             after_confirm = 2.0
             dispatch_mode = 'auto'
 
-        spar_pt = self.gui.get_current_spar_coord()
-        attack_challenge_pt = self.gui.coords.get('attack_challenge')
-        start_pt = self.gui.coords.get('start_battle')
-        auto_queue_pt = self.gui.coords.get('auto_queue')
         wolf_slots = self.gui.coords.get('wolf_slots', [])
-        draw_pt = self.gui.coords.get('draw')
-        confirm_pt = self.gui.coords.get('confirm')
-
-        # 解析指定狼隻編號 (如: "1" 或 "1, 2, 3")
         target_wolf_indices = []
-        if mode == 'attack' and dispatch_mode == 'manual':
+        if dispatch_mode == 'manual':
             raw_wolves = str(self.gui.selected_wolves_var.get()).replace('，', ',').replace('、', ',')
             for part in raw_wolves.split(','):
                 part = part.strip()
@@ -383,98 +518,67 @@ class ArenaDefenseAutomation:
             if not target_wolf_indices:
                 target_wolf_indices = [1]
 
-        mode_name = "⚔️ 進攻模式" if mode == 'attack' else "🛡️ 防守模式"
-        self.log(f"📋 開始執行【{mode_name}】，計劃進行 {total_rounds} 次挑戰")
-        if mode == 'attack':
-            if dispatch_mode == 'auto':
-                self.log("🐺 出戰派狼策略: 【自動隊列】全派")
-            else:
-                self.log(f"🐺 出戰派狼策略: 【指定狼隻】派出第 {target_wolf_indices} 隻")
+        params = {
+            'after_spar': after_spar,
+            'initial_delay': initial_delay,
+            'poll_interval': poll_interval,
+            'max_timeout': max_timeout,
+            'shuffle_delay': shuffle_delay,
+            'after_draw': after_draw,
+            'after_confirm': after_confirm,
+            'dispatch_mode': dispatch_mode,
+            'target_wolf_indices': target_wolf_indices
+        }
 
-        for r in range(1, total_rounds + 1):
+        # 構建執行任務隊列 (模式, 回合數, 階段說明)
+        stages = []
+        if mode == 'defense':
+            stages.append(('defense', defense_rounds, '🛡️ 純防守模式'))
+        elif mode == 'attack':
+            stages.append(('attack', attack_rounds, '⚔️ 純進攻模式'))
+        elif mode == 'attack_then_defense':
+            stages.append(('attack', attack_rounds, '⚔️ 進攻階段 (1/2)'))
+            stages.append(('defense', defense_rounds, '🛡️ 防守階段 (2/2)'))
+        elif mode == 'defense_then_attack':
+            stages.append(('defense', defense_rounds, '🛡️ 防守階段 (1/2)'))
+            stages.append(('attack', attack_rounds, '⚔️ 進攻階段 (2/2)'))
+
+        self.log(f"📋 排程初始化完成，共 {len(stages)} 個階段")
+
+        for stage_idx, (stage_mode, total_r, stage_label) in enumerate(stages):
             if not self.running:
                 break
 
-            self.log("--------------------------------------------")
-            self.log(f"{mode_name} 【第 {r} / {total_rounds} 次挑戰開始】")
-
-            # 1. 點擊切磋一下
-            if not self.click_point("切磋按鈕", spar_pt):
-                break
-            if not self.sleep_interruptible(after_spar):
-                break
-
-            # 2. 進攻模式專屬：點擊切磋後的「挑戰」按鈕進入出戰隊列
-            if mode == 'attack':
-                if attack_challenge_pt:
-                    self.log("⚔️ 點擊切磋後的「挑戰」按鈕...")
-                    if not self.click_point("挑戰按鈕", attack_challenge_pt):
-                        break
-                    if not self.sleep_interruptible(after_spar):
-                        break
-                else:
-                    self.log("⚠️ 未設定進攻挑戰按鈕座標，嘗試直接進入出戰隊列")
-
-                # 3. 派狼處理 (出戰隊列)
+            self.log("============================================")
+            self.log(f"🚀 開始執行【{stage_label}】，預計進行 {total_r} 次")
+            if stage_mode == 'attack':
                 if dispatch_mode == 'auto':
-                    self.log("🐺 點擊「自動隊列」填滿出戰狼隻...")
-                    if auto_queue_pt and not self.click_point("自動隊列按鈕", auto_queue_pt):
-                        break
-                    time.sleep(0.5)
+                    self.log("🐺 出戰派狼策略: 【自動隊列】全派")
                 else:
-                    self.log(f"🐺 依序派出指定狼隻: {target_wolf_indices} ...")
-                    for w_idx in target_wolf_indices:
-                        if not self.running:
-                            break
-                        slot_pt = wolf_slots[w_idx - 1]
-                        self.log(f"👉 點擊第 {w_idx} 號狼槽: {slot_pt}")
-                        pyautogui.leftClick(slot_pt[0], slot_pt[1])
-                        time.sleep(0.3)
-                    time.sleep(0.3)
+                    self.log(f"🐺 出戰派狼策略: 【指定狼隻】派出第 {target_wolf_indices} 隻")
 
-            # 4. 點擊開始戰鬥
-            if not self.click_point("開始戰鬥", start_pt):
-                break
-
-            # 4. 動態等待戰鬥結束 (自動針對遊戲螢幕辨識 勝利/失敗/抽獎)
-            if not self.wait_for_battle_end(initial_delay, poll_interval, max_timeout):
-                break
-
-            # 5. 抽獎二段式流程：點擊卡片觸發洗牌 -> 等待洗牌動畫 -> 再次點擊卡片正式抽獎
-            if draw_pt:
-                time.sleep(0.5)
-                self.log("🎴 【抽獎步驟 1/2】點擊卡片觸發洗牌...")
-                if not self.click_point("抽獎卡片 (觸發洗牌)", draw_pt):
+            for r in range(1, total_r + 1):
+                if not self.running:
+                    break
+                success = self.execute_single_round(stage_mode, r, total_r, params)
+                if not success:
+                    self.log(f"⚠️ 【{stage_label}】第 {r} 次執行中斷")
                     break
 
-                self.log(f"⏳ 等待卡片洗牌動畫 ({shuffle_delay} 秒)...")
-                if not self.sleep_interruptible(shuffle_delay):
-                    break
-
-                self.log("🎴 【抽獎步驟 2/2】再次點擊卡片正式抽獎！")
-                if not self.click_point("抽獎卡片 (正式抽獎)", draw_pt):
-                    break
-            else:
-                self.log("ℹ️ 未設定抽獎卡片座標，跳過點擊")
-
-            if not self.sleep_interruptible(after_draw):
+            if not self.running:
                 break
 
-            # 6. 點擊確定按鈕
-            if confirm_pt:
-                if not self.click_point("確定按鈕", confirm_pt):
+            self.log(f"✅ 【{stage_label}】已完成！")
+
+            # 若後面還有下一階段，進行過渡冷卻等待
+            if stage_idx < len(stages) - 1:
+                self.log("⏳ 準備切換至下一階段，等待過渡返回主畫面 (3.0 秒)...")
+                if not self.sleep_interruptible(3.0):
                     break
-            else:
-                self.log("ℹ️ 未設定確定座標，跳過點擊")
 
-            if not self.sleep_interruptible(after_confirm):
-                break
-
-            self.log(f"✔ 第 {r} 次挑戰結算完成！")
-
-        self.log("--------------------------------------------")
+        self.log("============================================")
         if self.running:
-            self.log(f"🎉 競技場【{mode_name}】所有挑戰執行完畢！")
+            self.log("🎉 競技場排程所有挑戰已全數執行完畢！")
         self.stop()
 
 
@@ -482,15 +586,18 @@ class ArenaGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("保衛羊村 - 競技場挑戰 (防守 & 進攻)")
-        self.root.geometry('440x800')
+        center_window_on_cursor(self.root, 440, 800)
 
         self.topmost = True
         self.root.attributes('-topmost', True)
 
-        # 模式控制：defense (防守) / attack (進攻)
+        # 模式控制：defense (防守) / attack (進攻) / attack_then_defense (先攻後防) / defense_then_attack (先防後攻)
         self.mode_var = tk.StringVar(value='defense')
         self.dispatch_mode_var = tk.StringVar(value='auto')  # auto / manual
         self.selected_wolves_var = tk.StringVar(value='1')
+        self.defense_rounds_var = tk.StringVar(value='10')
+        self.attack_rounds_var = tk.StringVar(value='5')
+        self.rounds_var = self.defense_rounds_var  # 舊設定向下相容參照
 
         self.coords = {
             'spar_defense': None,
@@ -543,18 +650,23 @@ class ArenaGUI:
             elevate_btn = tk.Button(admin_frame, text="以管理員身份運行", command=self.request_admin, bg="#FF9800", fg="white", font=('Arial', 8), pady=1)
             elevate_btn.pack(side=tk.RIGHT)
 
-        # 🎮 模式選擇區 (防守 vs 進攻)
+        # 🎮 模式選擇區 (4 種自由選擇)
         mode_box = tk.LabelFrame(main, text='🎮 模式選擇', padx=5, pady=3)
         mode_box.pack(fill='x', pady=2)
 
-        m_frame = tk.Frame(mode_box)
-        m_frame.pack(fill='x')
-
-        self.rb_defense = tk.Radiobutton(m_frame, text='🛡️ 防守模式', variable=self.mode_var, value='defense', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#0D47A1')
+        m_row1 = tk.Frame(mode_box)
+        m_row1.pack(fill='x', pady=1)
+        self.rb_defense = tk.Radiobutton(m_row1, text='🛡️ 防守模式', variable=self.mode_var, value='defense', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#0D47A1')
         self.rb_defense.pack(side='left', padx=10)
-
-        self.rb_attack = tk.Radiobutton(m_frame, text='⚔️ 進攻模式', variable=self.mode_var, value='attack', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#B71C1C')
+        self.rb_attack = tk.Radiobutton(m_row1, text='⚔️ 進攻模式', variable=self.mode_var, value='attack', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#B71C1C')
         self.rb_attack.pack(side='left', padx=10)
+
+        m_row2 = tk.Frame(mode_box)
+        m_row2.pack(fill='x', pady=1)
+        self.rb_atd = tk.Radiobutton(m_row2, text='⚔️➔🛡️ 先攻後防', variable=self.mode_var, value='attack_then_defense', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#8E24AA')
+        self.rb_atd.pack(side='left', padx=10)
+        self.rb_dta = tk.Radiobutton(m_row2, text='🛡️➔⚔️ 先防後攻', variable=self.mode_var, value='defense_then_attack', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#00897B')
+        self.rb_dta.pack(side='left', padx=10)
 
         # 運行控制區
         control_frame = tk.LabelFrame(main, text='運行控制', padx=5, pady=3)
@@ -569,43 +681,49 @@ class ArenaGUI:
         self.stop_btn = tk.Button(cf, text='停止 (F10)', command=self.auto.stop, bg="#f44336", fg="white", font=('Arial', 10, 'bold'), state='disabled')
         self.stop_btn.pack(side='left', expand=True, fill='x', padx=2)
 
-        # 📍 點擊座標配置區
+        # 📍 點擊座標配置區 (清楚獨立)
         coord_box = tk.LabelFrame(main, text='📍 基礎座標配置 (點擊按鈕 ➔ 移至位置按 K 鍵)', padx=5, pady=3)
         coord_box.pack(fill='x', pady=2)
 
-        # ① 切磋座標 (依模式顯示)
-        r1 = tk.Frame(coord_box)
-        r1.pack(fill='x', pady=1)
-        self.btn_spar = tk.Button(r1, text='① 切磋座標 (K鍵)', command=self.start_capture_current_spar, bg="#2196F3", fg="white", font=('Arial', 8, 'bold'), width=17)
-        self.btn_spar.pack(side='left')
-        self.lbl_spar = tk.Label(r1, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_spar.pack(side='left', padx=6)
+        # ① 防守切磋座標
+        r_def = tk.Frame(coord_box)
+        r_def.pack(fill='x', pady=1)
+        tk.Button(r_def, text='① 防守切磋 (K鍵)', command=lambda: self.start_capture('spar_defense', '移至左側【防守切磋按鈕】按 K 鍵'), bg="#2196F3", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        self.lbl_spar_def = tk.Label(r_def, text='未設定', font=('Arial', 9), fg='#B71C1C')
+        self.lbl_spar_def.pack(side='left', padx=6)
 
-        # ② 切磋後挑戰座標 (進攻專用)
+        # ② 進攻切磋座標
+        r_att = tk.Frame(coord_box)
+        r_att.pack(fill='x', pady=1)
+        tk.Button(r_att, text='② 進攻切磋 (K鍵)', command=lambda: self.start_capture('spar_attack', '移至右側【進攻切磋按鈕】按 K 鍵'), bg="#D32F2F", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        self.lbl_spar_att = tk.Label(r_att, text='未設定', font=('Arial', 9), fg='#B71C1C')
+        self.lbl_spar_att.pack(side='left', padx=6)
+
+        # ③ 切磋後挑戰座標 (進攻專用)
         r_chal = tk.Frame(coord_box)
         r_chal.pack(fill='x', pady=1)
-        tk.Button(r_chal, text='② 切磋後挑戰(K鍵)', command=lambda: self.start_capture('attack_challenge', '移至切磋後的彈窗【挑戰按鈕】按 K 鍵'), bg="#E91E63", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        tk.Button(r_chal, text='③ 切磋後挑戰(K鍵)', command=lambda: self.start_capture('attack_challenge', '移至切磋後的彈窗【挑戰按鈕】按 K 鍵'), bg="#E91E63", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
         self.lbl_challenge = tk.Label(r_chal, text='未設定 [進攻專用]', font=('Arial', 9), fg='#B71C1C')
         self.lbl_challenge.pack(side='left', padx=6)
 
-        # ③ 開始戰鬥座標
+        # ④ 開始戰鬥座標
         r2 = tk.Frame(coord_box)
         r2.pack(fill='x', pady=1)
-        tk.Button(r2, text='③ 開始戰鬥 (K鍵)', command=lambda: self.start_capture('start_battle', '移至【開始戰鬥按鈕】按 K 鍵'), bg="#FF9800", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        tk.Button(r2, text='④ 開始戰鬥 (K鍵)', command=lambda: self.start_capture('start_battle', '移至【開始戰鬥按鈕】按 K 鍵'), bg="#FF9800", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
         self.lbl_start = tk.Label(r2, text='未設定', font=('Arial', 9), fg='#B71C1C')
         self.lbl_start.pack(side='left', padx=6)
 
-        # ④ 抽獎卡片座標
+        # ⑤ 抽獎卡片座標
         r3 = tk.Frame(coord_box)
         r3.pack(fill='x', pady=1)
-        tk.Button(r3, text='④ 抽獎卡片 (K鍵)', command=lambda: self.start_capture('draw', '移至【中間抽獎卡片】按 K 鍵'), bg="#9C27B0", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        tk.Button(r3, text='⑤ 抽獎卡片 (K鍵)', command=lambda: self.start_capture('draw', '移至【中間抽獎卡片】按 K 鍵'), bg="#9C27B0", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
         self.lbl_draw = tk.Label(r3, text='未設定', font=('Arial', 9), fg='#B71C1C')
         self.lbl_draw.pack(side='left', padx=6)
 
-        # ⑤ 確定按鈕座標
+        # ⑥ 確定按鈕座標
         r4 = tk.Frame(coord_box)
         r4.pack(fill='x', pady=1)
-        tk.Button(r4, text='⑤ 確定按鈕 (K鍵)', command=lambda: self.start_capture('confirm', '移至獲獎【確定按鈕】按 K 鍵'), bg="#009688", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
+        tk.Button(r4, text='⑥ 確定按鈕 (K鍵)', command=lambda: self.start_capture('confirm', '移至獲獎【確定按鈕】按 K 鍵'), bg="#009688", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
         self.lbl_confirm = tk.Label(r4, text='未設定', font=('Arial', 9), fg='#B71C1C')
         self.lbl_confirm.pack(side='left', padx=6)
 
@@ -639,7 +757,8 @@ class ArenaGUI:
         r_clear = tk.Frame(main)
         r_clear.pack(fill='x', pady=1)
         tk.Button(r_clear, text='🖥️ 標記預覽 (即時視覺化微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', fill='x', expand=True, padx=(0, 4))
-        tk.Button(r_clear, text='清空當前模式座標', command=self.clear_current_mode_coords, font=('Arial', 8)).pack(side='right')
+        tk.Button(r_clear, text='清空防守', command=self.clear_defense_coords, font=('Arial', 8)).pack(side='left', padx=2)
+        tk.Button(r_clear, text='清空進攻', command=self.clear_attack_coords, font=('Arial', 8)).pack(side='left', padx=2)
 
         # ⚙️ 運行參數配置 (按時間執行順序排列)
         param_box = tk.LabelFrame(main, text='⚙️ 運行參數配置 (按執行順序排列)', padx=5, pady=3)
@@ -651,17 +770,19 @@ class ArenaGUI:
         tk.Label(pb_head, text='順序: ①切磋 ➔ ②戰鬥偵測 ➔ ③卡片洗牌 ➔ ④翻牌揭曉 ➔ ⑤確定結算', font=('Arial', 8, 'bold'), fg='#0D47A1').pack(side='left')
         tk.Button(pb_head, text='❓ 階段說明', command=self.show_stage_guide, bg="#009688", fg="white", font=('Arial', 8, 'bold')).pack(side='right')
 
-        # 行 1: 挑戰次數 & ① 切磋後等待
+        # 行 1: 防守次數 & 進攻次數 & ① 切磋後等待
         p_row1 = tk.Frame(param_box)
         p_row1.pack(fill='x', pady=1)
-        tk.Label(p_row1, text='挑戰次數:', font=('Arial', 8)).pack(side='left')
-        self.rounds_var = tk.StringVar(value='10')
-        tk.Entry(p_row1, textvariable=self.rounds_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
+        tk.Label(p_row1, text='🛡️ 防守次數:', font=('Arial', 8, 'bold'), fg='#0D47A1').pack(side='left')
+        tk.Entry(p_row1, textvariable=self.defense_rounds_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
 
-        tk.Label(p_row1, text='① 切磋後等待:', font=('Arial', 8, 'bold'), fg='#1565C0').pack(side='left', padx=(8, 0))
+        tk.Label(p_row1, text='⚔️ 進攻次數:', font=('Arial', 8, 'bold'), fg='#B71C1C').pack(side='left', padx=(6, 0))
+        tk.Entry(p_row1, textvariable=self.attack_rounds_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
+
+        tk.Label(p_row1, text='① 切磋等待:', font=('Arial', 8, 'bold'), fg='#1565C0').pack(side='left', padx=(6, 0))
         self.spar_delay_var = tk.StringVar(value='2.0')
-        tk.Entry(p_row1, textvariable=self.spar_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
-        tk.Label(p_row1, text='秒 (等彈窗出現)', font=('Arial', 8), fg='gray').pack(side='left')
+        tk.Entry(p_row1, textvariable=self.spar_delay_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
+        tk.Label(p_row1, text='s', font=('Arial', 8), fg='gray').pack(side='left')
 
         # 行 2: ② 戰鬥等待 & 動態輪詢
         p_battle = tk.Frame(param_box)
@@ -706,32 +827,31 @@ class ArenaGUI:
         tk.Label(bottom_f, text='按 F10 鍵可全域緊急停止', font=('Arial', 8), fg='gray').pack(side='right')
 
     def get_current_spar_coord(self):
-        if self.mode_var.get() == 'attack':
+        mode = self.mode_var.get()
+        if mode == 'attack':
             return self.coords.get('spar_attack')
-        else:
+        elif mode == 'defense':
             return self.coords.get('spar_defense') or self.coords.get('spar')
+        else:
+            return self.coords.get('spar_defense') or self.coords.get('spar') or self.coords.get('spar_attack')
 
     def on_mode_change(self):
         mode = self.mode_var.get()
-        if mode == 'attack':
-            self.btn_spar.config(text='① 進攻切磋 (K鍵)', bg="#D32F2F")
-            self.auto.log("🔄 切換至【⚔️ 進攻模式】")
-        else:
-            self.btn_spar.config(text='① 防守切磋 (K鍵)', bg="#2196F3")
-            self.auto.log("🔄 切換至【🛡️ 防守模式】")
+        titles = {
+            'defense': '🛡️ 純防守模式',
+            'attack': '⚔️ 純進攻模式',
+            'attack_then_defense': '⚔️➔🛡️ 先攻後防模式',
+            'defense_then_attack': '🛡️➔⚔️ 先防後攻模式'
+        }
+        self.auto.log(f"🔄 切換至【{titles.get(mode, mode)}】")
         self.update_coord_labels()
 
-    def start_capture_current_spar(self):
-        mode = self.mode_var.get()
-        if mode == 'attack':
-            self.start_capture('spar_attack', '移至右側【進攻切磋按鈕】按 K 鍵')
-        else:
-            self.start_capture('spar_defense', '移至左側【防守切磋按鈕】按 K 鍵')
-
     def update_coord_labels(self):
-        s = self.get_current_spar_coord()
-        mode_str = "進攻" if self.mode_var.get() == 'attack' else "防守"
-        self.lbl_spar.config(text=f"({s[0]}, {s[1]}) [{mode_str}]" if s else f"未設定 [{mode_str}]", fg="green" if s else "#B71C1C")
+        sd = self.coords.get('spar_defense') or self.coords.get('spar')
+        self.lbl_spar_def.config(text=f"({sd[0]}, {sd[1]})" if sd else "未設定", fg="green" if sd else "#B71C1C")
+
+        sa = self.coords.get('spar_attack')
+        self.lbl_spar_att.config(text=f"({sa[0]}, {sa[1]})" if sa else "未設定", fg="green" if sa else "#B71C1C")
 
         b = self.coords.get('start_battle')
         self.lbl_start.config(text=f"({b[0]}, {b[1]})" if b else "未設定", fg="green" if b else "#B71C1C")
@@ -751,17 +871,19 @@ class ArenaGUI:
         slots = self.coords.get('wolf_slots', [])
         self.lbl_wolf_slots.config(text=f"({len(slots)}/8 點)" if slots else "(0/8)", fg="green" if len(slots) == 8 else "#B71C1C")
 
-    def clear_current_mode_coords(self):
-        if self.mode_var.get() == 'attack':
-            self.coords['spar_attack'] = None
-            self.coords['attack_challenge'] = None
-            self.coords['auto_queue'] = None
-            self.coords['wolf_slots'] = []
-            self.auto.log("已清空進攻專屬座標 (進攻切磋、挑戰、自動隊列、狼槽)")
-        else:
-            self.coords['spar_defense'] = None
-            self.coords['spar'] = None
-            self.auto.log("已清空防守切磋座標")
+    def clear_defense_coords(self):
+        self.coords['spar_defense'] = None
+        self.coords['spar'] = None
+        self.auto.log("已清空防守切磋座標")
+        self.update_coord_labels()
+        self.save_config()
+
+    def clear_attack_coords(self):
+        self.coords['spar_attack'] = None
+        self.coords['attack_challenge'] = None
+        self.coords['auto_queue'] = None
+        self.coords['wolf_slots'] = []
+        self.auto.log("已清空進攻專屬座標 (進攻切磋、挑戰、自動隊列、狼槽)")
         self.update_coord_labels()
         self.save_config()
 
@@ -929,7 +1051,9 @@ class ArenaGUI:
             'mode': self.mode_var.get(),
             'dispatch_mode': self.dispatch_mode_var.get(),
             'selected_wolves': self.selected_wolves_var.get(),
-            'rounds': self.rounds_var.get(),
+            'defense_rounds': self.defense_rounds_var.get(),
+            'attack_rounds': self.attack_rounds_var.get(),
+            'rounds': self.defense_rounds_var.get(),  # 相容舊版欄位
             'spar_delay': self.spar_delay_var.get(),
             'battle_initial': self.battle_initial_var.get(),
             'battle_poll': self.battle_poll_var.get(),
@@ -967,7 +1091,19 @@ class ArenaGUI:
             if 'mode' in data: self.mode_var.set(str(data['mode']))
             if 'dispatch_mode' in data: self.dispatch_mode_var.set(str(data['dispatch_mode']))
             if 'selected_wolves' in data: self.selected_wolves_var.set(str(data['selected_wolves']))
-            if 'rounds' in data: self.rounds_var.set(str(data['rounds']))
+
+            if 'defense_rounds' in data:
+                self.defense_rounds_var.set(str(data['defense_rounds']))
+            elif 'rounds' in data:
+                self.defense_rounds_var.set(str(data['rounds']))
+
+            if 'attack_rounds' in data:
+                self.attack_rounds_var.set(str(data['attack_rounds']))
+            elif 'rounds' in data and data.get('mode') == 'attack':
+                self.attack_rounds_var.set(str(data['rounds']))
+            else:
+                self.attack_rounds_var.set('5')
+
             if 'spar_delay' in data: self.spar_delay_var.set(str(data['spar_delay']))
             if 'battle_initial' in data: self.battle_initial_var.set(str(data['battle_initial']))
             if 'battle_poll' in data: self.battle_poll_var.set(str(data['battle_poll']))
@@ -1059,7 +1195,13 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.ctrl_frame = tk.Frame(self, bg='#212121', padx=14, pady=8, highlightbackground='#FFFFFF', highlightthickness=1)
         self.ctrl_frame.place(relx=0.5, y=18, anchor='n')
 
-        mode_text = "⚔️ 進攻模式" if self.gui.mode_var.get() == 'attack' else "🛡️ 防守模式"
+        mode_dict = {
+            'defense': '🛡️ 純防守模式',
+            'attack': '⚔️ 純進攻模式',
+            'attack_then_defense': '⚔️➔🛡️ 先攻後防模式',
+            'defense_then_attack': '🛡️➔⚔️ 先防後攻模式'
+        }
+        mode_text = mode_dict.get(self.gui.mode_var.get(), '競技場挑戰')
         self.status_lbl = tk.Label(self.ctrl_frame, text=f"💡 當前【{mode_text}】：按住標籤或圖示即可拖曳移動座標 | 【右鍵】或【ESC】關閉", font=('Microsoft JhengHei', 9, 'bold'), bg='#212121', fg='#FFEB3B')
         self.status_lbl.pack(side='left', padx=(0, 16))
 
@@ -1105,22 +1247,24 @@ class ScreenOverlayDialog(tk.Toplevel):
 
         mode = self.gui.mode_var.get()
 
-        # 1. 切磋按鈕 (依當前模式呈現)
-        if mode == 'attack':
-            if self.edit_coords.get('spar_attack'):
-                pt = self.edit_coords['spar_attack']
-                draw_pin(pt[0], pt[1], "① 進攻切磋", "#D32F2F", {'type': 'key', 'key': 'spar_attack', 'name': '進攻切磋'}, shape='circle', radius=16)
-        else:
+        # 1. 防守切磋按鈕 (防守或連動模式顯示)
+        if mode in ('defense', 'attack_then_defense', 'defense_then_attack'):
             spar_pt = self.edit_coords.get('spar_defense') or self.edit_coords.get('spar')
             if spar_pt:
                 k = 'spar_defense' if self.edit_coords.get('spar_defense') else 'spar'
                 draw_pin(spar_pt[0], spar_pt[1], "① 防守切磋", "#2196F3", {'type': 'key', 'key': k, 'name': '防守切磋'}, shape='circle', radius=16)
 
-        # 2. 進攻專屬按鈕 (挑戰 & 自動隊列 & 8格狼槽)
-        if mode == 'attack':
+        # 2. 進攻切磋按鈕 (進攻或連動模式顯示)
+        if mode in ('attack', 'attack_then_defense', 'defense_then_attack'):
+            if self.edit_coords.get('spar_attack'):
+                pt = self.edit_coords['spar_attack']
+                draw_pin(pt[0], pt[1], "② 進攻切磋", "#D32F2F", {'type': 'key', 'key': 'spar_attack', 'name': '進攻切磋'}, shape='circle', radius=16)
+
+        # 3. 進攻專屬按鈕 (挑戰 & 自動隊列 & 8格狼槽)
+        if mode in ('attack', 'attack_then_defense', 'defense_then_attack'):
             if self.edit_coords.get('attack_challenge'):
                 pt = self.edit_coords['attack_challenge']
-                draw_pin(pt[0], pt[1], "⚔️ 挑戰按鈕", "#FF5722", {'type': 'key', 'key': 'attack_challenge', 'name': '挑戰按鈕'}, shape='rect', radius=15)
+                draw_pin(pt[0], pt[1], "③ 挑戰按鈕", "#FF5722", {'type': 'key', 'key': 'attack_challenge', 'name': '挑戰按鈕'}, shape='rect', radius=15)
 
             if self.edit_coords.get('auto_queue'):
                 pt = self.edit_coords['auto_queue']
@@ -1143,20 +1287,20 @@ class ScreenOverlayDialog(tk.Toplevel):
                             'target_info': {'type': 'wolf_slot', 'idx': w_idx - 1, 'name': f'狼槽 {w_idx}'}
                         })
 
-        # 3. 開始戰鬥按鈕
+        # 4. 開始戰鬥按鈕
         if self.edit_coords.get('start_battle'):
             pt = self.edit_coords['start_battle']
-            draw_pin(pt[0], pt[1], "② 開始戰鬥", "#2E7D32", {'type': 'key', 'key': 'start_battle', 'name': '開始戰鬥'}, shape='rect', radius=16)
+            draw_pin(pt[0], pt[1], "④ 開始戰鬥", "#2E7D32", {'type': 'key', 'key': 'start_battle', 'name': '開始戰鬥'}, shape='rect', radius=16)
 
-        # 4. 抽獎卡片
+        # 5. 抽獎卡片
         if self.edit_coords.get('draw'):
             pt = self.edit_coords['draw']
-            draw_pin(pt[0], pt[1], "④ 抽獎卡片", "#9C27B0", {'type': 'key', 'key': 'draw', 'name': '抽獎卡片'}, shape='rect', radius=18)
+            draw_pin(pt[0], pt[1], "⑤ 抽獎卡片", "#9C27B0", {'type': 'key', 'key': 'draw', 'name': '抽獎卡片'}, shape='rect', radius=18)
 
-        # 5. 確定按鈕
+        # 6. 確定按鈕
         if self.edit_coords.get('confirm'):
             pt = self.edit_coords['confirm']
-            draw_pin(pt[0], pt[1], "⑤ 確定按鈕", "#009688", {'type': 'key', 'key': 'confirm', 'name': '確定按鈕'}, shape='rect', radius=16)
+            draw_pin(pt[0], pt[1], "⑥ 確定按鈕", "#009688", {'type': 'key', 'key': 'confirm', 'name': '確定按鈕'}, shape='rect', radius=16)
 
     def on_hover(self, event):
         mx, my = event.x, event.y
