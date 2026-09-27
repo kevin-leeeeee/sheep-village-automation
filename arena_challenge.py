@@ -15,6 +15,7 @@
 
 import sys
 import os
+import shutil
 import ctypes
 from ctypes import wintypes
 import json
@@ -38,6 +39,7 @@ import pyautogui
 pyautogui.FAILSAFE = False
 
 import win32api
+from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import pynput
@@ -50,7 +52,7 @@ def get_image_path(filename):
     return os.path.join(IMAGE_DIR, filename)
 
 def center_window_on_cursor(root, width, height):
-    """將視窗置中顯示在啟動時滑鼠游標所在的螢幕"""
+    """將視窗置中顯示在啟動時滑鼠游標所在的螢幕，自動配合螢幕可用高度縮放"""
     try:
         monitors = win32api.EnumDisplayMonitors()
         pt = wintypes.POINT()
@@ -63,9 +65,13 @@ def center_window_on_cursor(root, width, height):
             m_rect = m_info['Monitor']
             if m_rect[0] <= px <= m_rect[2] and m_rect[1] <= py <= m_rect[3]:
                 work = m_info.get('Work', m_rect)
-                spawn_x = work[0] + max(0, (work[2] - work[0] - width) // 2)
-                spawn_y = work[1] + max(0, (work[3] - work[1] - height) // 2)
-                root.geometry(f"{width}x{height}+{spawn_x}+{spawn_y}")
+                avail_w = work[2] - work[0]
+                avail_h = work[3] - work[1]
+                target_w = min(width, max(380, avail_w - 20))
+                target_h = min(height, max(450, avail_h - 40))
+                spawn_x = work[0] + max(0, (avail_w - target_w) // 2)
+                spawn_y = work[1] + max(0, (avail_h - target_h) // 2)
+                root.geometry(f"{target_w}x{target_h}+{spawn_x}+{spawn_y}")
                 return
     except Exception:
         pass
@@ -586,7 +592,7 @@ class ArenaGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("保衛羊村 - 競技場挑戰 (防守 & 進攻)")
-        center_window_on_cursor(self.root, 440, 800)
+        center_window_on_cursor(self.root, 435, 690)
 
         self.topmost = True
         self.root.attributes('-topmost', True)
@@ -624,8 +630,39 @@ class ArenaGUI:
         self.load_config()
 
     def setup_ui(self):
-        main = tk.Frame(self.root, padx=8, pady=6)
-        main.pack(fill=tk.BOTH, expand=True)
+        # 建立外層滾動容器，確保小螢幕按鈕絕不被截斷
+        self.canvas_container = tk.Frame(self.root)
+        self.canvas_container.pack(fill=tk.BOTH, expand=True)
+
+        self.main_canvas = tk.Canvas(self.canvas_container, highlightthickness=0)
+        self.main_scrollbar = ttk.Scrollbar(self.canvas_container, orient="vertical", command=self.main_canvas.yview)
+
+        main = tk.Frame(self.main_canvas, padx=6, pady=4)
+        self.canvas_window_id = self.main_canvas.create_window((0, 0), window=main, anchor="nw")
+
+        def _on_main_configure(e):
+            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
+        main.bind("<Configure>", _on_main_configure)
+
+        def _on_canvas_configure(e):
+            self.main_canvas.itemconfig(self.canvas_window_id, width=e.width)
+        self.main_canvas.bind('<Configure>', _on_canvas_configure)
+
+        self.main_canvas.configure(yscrollcommand=self.main_scrollbar.set)
+        self.main_canvas.pack(side="left", fill="both", expand=True)
+        self.main_scrollbar.pack(side="right", fill="y")
+
+        # 滾輪智慧滾動：當游標未在日誌區時，滾動主介面
+        def _on_mousewheel(event):
+            try:
+                if self.main_canvas.winfo_height() < main.winfo_reqheight():
+                    widget = self.root.winfo_containing(event.x_root, event.y_root)
+                    if widget is not getattr(self, 'log_text', None):
+                        self.main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+
+        self.root.bind_all("<MouseWheel>", _on_mousewheel)
 
         # 頂部標題與置頂按鈕
         header_frame = tk.Frame(main)
@@ -753,10 +790,11 @@ class ArenaGUI:
         self.lbl_wolf_slots = tk.Label(d_row3, text='(0/8 點)', font=('Arial', 8), fg='#B71C1C')
         self.lbl_wolf_slots.pack(side='left', padx=6)
 
-        # 清空與標記預覽按鈕行
+        # 清空與標記預覽按鈕行 (並排截圖校正，不增加垂直高度)
         r_clear = tk.Frame(main)
         r_clear.pack(fill='x', pady=1)
-        tk.Button(r_clear, text='🖥️ 標記預覽 (即時視覺化微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', fill='x', expand=True, padx=(0, 4))
+        tk.Button(r_clear, text='🖥️ 標記預覽 (即時微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', fill='x', expand=True, padx=(0, 2))
+        tk.Button(r_clear, text='📸 截圖校正', command=self.open_image_crop_dialog, bg="#00897B", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=2)
         tk.Button(r_clear, text='清空防守', command=self.clear_defense_coords, font=('Arial', 8)).pack(side='left', padx=2)
         tk.Button(r_clear, text='清空進攻', command=self.clear_attack_coords, font=('Arial', 8)).pack(side='left', padx=2)
 
@@ -887,6 +925,20 @@ class ArenaGUI:
         self.update_coord_labels()
         self.save_config()
 
+    def capture_screen(self):
+        if hasattr(self, 'auto') and self.auto:
+            return self.auto.capture_screen()
+        return None
+
+    def open_image_crop_dialog(self):
+        """開啟圖像模板截圖校正視窗"""
+        templates = [
+            ('arena_shengli.png', '戰鬥勝利結算圖'),
+            ('arena_shibai.png', '戰鬥惜敗結算圖'),
+            ('arena_choujiang.png', '翻牌抽獎特徵圖')
+        ]
+        ImageCropDialog(self.root, self, templates)
+
     def open_screen_overlay(self):
         """開啟或關閉 1:1 直接覆蓋於當前螢幕畫面的透明標記層 (重複點擊則關閉，避免重疊)"""
         if self.screen_overlay:
@@ -911,6 +963,12 @@ class ArenaGUI:
                  self.coords.get('attack_challenge')
             if not pt and self.coords.get('wolf_slots'):
                 pt = self.coords['wolf_slots'][0]
+
+            # 若未設定任何遊戲座標，自動鎖定當前滑鼠游標所在螢幕
+            if not pt:
+                cur_pt = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(cur_pt)):
+                    pt = (cur_pt.x, cur_pt.y)
 
             if pt and monitors:
                 px, py = pt
@@ -1428,6 +1486,280 @@ class ScreenOverlayDialog(tk.Toplevel):
         if hasattr(self.gui, 'screen_overlay') and self.gui.screen_overlay is self:
             self.gui.screen_overlay = None
         super().destroy()
+
+
+class ImageCropDialog(tk.Toplevel):
+    """圖像模板截圖校正視窗 (讓使用者能自訂選擇並框選替換模板圖片)"""
+    def __init__(self, parent, gui, template_choices):
+        super().__init__(parent)
+        self.gui = gui
+        self.template_choices = template_choices
+        self.title("📸 圖像模板截圖校正")
+        self.geometry("390x320")
+        self.attributes('-topmost', True)
+        self.resizable(False, False)
+
+        top_frame = tk.Frame(self, padx=10, pady=8, bg='#263238')
+        top_frame.pack(fill='x')
+        tk.Label(top_frame, text="📸 選擇目標圖案並進行螢幕框選替換", font=('Microsoft JhengHei', 10, 'bold'), bg='#263238', fg='#ECEFF1').pack(anchor='w')
+        tk.Label(top_frame, text="若遊戲改版或解析度不同導致無法辨識，可在畫面上直接拉框重新截圖。", font=('Microsoft JhengHei', 8), bg='#263238', fg='#B0BEC5').pack(anchor='w')
+
+        content_frame = tk.Frame(self, padx=12, pady=10)
+        content_frame.pack(fill='both', expand=True)
+
+        row_sel = tk.Frame(content_frame)
+        row_sel.pack(fill='x', pady=4)
+        tk.Label(row_sel, text="目標圖案:", font=('Microsoft JhengHei', 9, 'bold')).pack(side='left', padx=(0, 6))
+
+        self.combo_var = tk.StringVar()
+        display_names = [f"{name} ({fname})" for fname, name in self.template_choices]
+        self.combo = ttk.Combobox(row_sel, textvariable=self.combo_var, values=display_names, state='readonly', font=('Microsoft JhengHei', 9))
+        self.combo.pack(side='left', fill='x', expand=True)
+        self.combo.current(0)
+        self.combo.bind('<<ComboboxSelected>>', lambda e: self.update_preview())
+
+        preview_box = tk.LabelFrame(content_frame, text="當前模板預覽", font=('Microsoft JhengHei', 8), padx=8, pady=6)
+        preview_box.pack(fill='both', expand=True, pady=6)
+
+        self.img_lbl = tk.Label(preview_box, bg='#E0E0E0', width=16, height=4)
+        self.img_lbl.pack(side='left', padx=(0, 10))
+
+        info_f = tk.Frame(preview_box)
+        info_f.pack(side='left', fill='both', expand=True)
+        self.info_size_lbl = tk.Label(info_f, text="尺寸: -", font=('Microsoft JhengHei', 8), anchor='w')
+        self.info_size_lbl.pack(fill='x')
+        self.info_status_lbl = tk.Label(info_f, text="狀態: -", font=('Microsoft JhengHei', 8), anchor='w')
+        self.info_status_lbl.pack(fill='x')
+
+        btn_box = tk.Frame(content_frame)
+        btn_box.pack(fill='x', pady=6)
+
+        self.crop_btn = tk.Button(btn_box, text="🖱️ 開始螢幕框選截圖", command=self.start_crop_process, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 9, 'bold'), pady=3)
+        self.crop_btn.pack(side='left', fill='x', expand=True, padx=(0, 4))
+
+        self.restore_btn = tk.Button(btn_box, text="🔄 還原備份", command=self.restore_backup, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 9), pady=3)
+        self.restore_btn.pack(side='left', padx=2)
+
+        close_btn = tk.Button(btn_box, text="關閉", command=self.destroy, font=('Microsoft JhengHei', 9), pady=3, width=6)
+        close_btn.pack(side='left', padx=(4, 0))
+
+        self.photo_cache = None
+        self.update_preview()
+
+    def get_selected_filename(self):
+        idx = self.combo.current()
+        if 0 <= idx < len(self.template_choices):
+            return self.template_choices[idx][0]
+        return None
+
+    def update_preview(self):
+        fname = self.get_selected_filename()
+        if not fname:
+            return
+        path = get_image_path(fname)
+        bak_path = path + '.bak'
+
+        if os.path.exists(path):
+            try:
+                pil_img = Image.open(path)
+                w, h = pil_img.size
+                self.info_size_lbl.config(text=f"尺寸: {w} × {h} 像素")
+
+                status_txt = "狀態: ✔ 已自訂 (含原版備份)" if os.path.exists(bak_path) else "狀態: 原版/預設檔案"
+                self.info_status_lbl.config(text=status_txt, fg="#1565C0" if os.path.exists(bak_path) else "#37474F")
+                self.restore_btn.config(state='normal' if os.path.exists(bak_path) else 'disabled')
+
+                scale = min(120 / max(1, w), 60 / max(1, h), 1.0)
+                tw, th = max(1, int(w * scale)), max(1, int(h * scale))
+                resized = pil_img.resize((tw, th), Image.Resampling.LANCZOS)
+                self.photo_cache = ImageTk.PhotoImage(resized)
+                self.img_lbl.config(image=self.photo_cache, text="")
+            except Exception as e:
+                self.img_lbl.config(image="", text="無法讀取")
+                self.info_size_lbl.config(text=f"讀取錯誤: {e}")
+        else:
+            self.img_lbl.config(image="", text="檔案不存在")
+            self.info_size_lbl.config(text="尺寸: 檔案不存在")
+            self.info_status_lbl.config(text="狀態: 尚未建立", fg="red")
+            self.restore_btn.config(state='disabled')
+
+    def restore_backup(self):
+        fname = self.get_selected_filename()
+        if not fname: return
+        path = get_image_path(fname)
+        bak_path = path + '.bak'
+        if os.path.exists(bak_path):
+            try:
+                shutil.copy2(bak_path, path)
+                self.update_preview()
+                self.gui.auto.log(f"🔄 已還原圖片: {fname} 至初始備份狀態")
+                messagebox.showinfo("還原成功", f"已成功將 {fname} 還原至初始備份！", parent=self)
+            except Exception as e:
+                messagebox.showerror("還原失敗", f"還原時發生錯誤: {e}", parent=self)
+
+    def start_crop_process(self):
+        fname = self.get_selected_filename()
+        if not fname: return
+        self.withdraw()
+        self.update()
+        # 延遲 150ms 確保校正視窗完全從螢幕隱藏後再截圖
+        self.after(150, lambda: CropSelectorOverlay(self, self.gui, fname, self.on_crop_complete))
+
+    def on_crop_complete(self, success, msg):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        if success:
+            self.update_preview()
+
+
+class CropSelectorOverlay(tk.Toplevel):
+    """全螢幕框選裁切互動層：精確凍結當前畫面並支援滑鼠自由框選"""
+    def __init__(self, parent_dialog, gui, target_filename, callback):
+        super().__init__(parent_dialog)
+        self.parent_dialog = parent_dialog
+        self.gui = gui
+        self.target_filename = target_filename
+        self.callback = callback
+
+        left, top, width, height = self.gui.get_target_monitor_rect()
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+
+        shot = self.gui.capture_screen()
+        if shot is None:
+            try:
+                py_shot = pyautogui.screenshot(region=(left, top, width, height))
+                shot = cv2.cvtColor(np.array(py_shot), cv2.COLOR_RGB2BGR)
+            except Exception:
+                py_shot = pyautogui.screenshot()
+                shot = cv2.cvtColor(np.array(py_shot), cv2.COLOR_RGB2BGR)
+        self.full_screenshot = shot
+
+        self.overrideredirect(True)
+        self.geometry(f"{width}x{height}+{left}+{top}")
+        self.attributes('-topmost', True)
+
+        self.canvas = tk.Canvas(self, highlightthickness=0, width=width, height=height, cursor='cross')
+        self.canvas.pack(fill='both', expand=True)
+
+        shot_h, shot_w = self.full_screenshot.shape[:2]
+        self.scale_x = shot_w / max(1, width)
+        self.scale_y = shot_h / max(1, height)
+
+        img_rgb = cv2.cvtColor(self.full_screenshot, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        if pil_img.size != (width, height):
+            pil_img = pil_img.resize((width, height), Image.Resampling.LANCZOS)
+        
+        self.bg_photo = ImageTk.PhotoImage(pil_img)
+        self.canvas.create_image(0, 0, image=self.bg_photo, anchor='nw')
+
+        tip_text = f"📸 請拖曳滑鼠左鍵框選【{self.target_filename}】目標圖案 | 【右鍵】或【ESC】取消"
+        self.banner_bg = self.canvas.create_rectangle(width // 2 - 270, 10, width // 2 + 270, 42, fill='#1B5E20', outline='white', width=1)
+        self.banner_txt = self.canvas.create_text(width // 2, 26, text=tip_text, fill="white", font=('Microsoft JhengHei', 10, 'bold'))
+
+        self.start_x = None
+        self.start_y = None
+        self.rect_id = None
+        self.tip_bg_id = None
+        self.tip_id = None
+
+        self.canvas.bind('<ButtonPress-1>', self.on_press)
+        self.canvas.bind('<B1-Motion>', self.on_motion)
+        self.canvas.bind('<ButtonRelease-1>', self.on_release)
+        self.bind('<Button-3>', lambda e: self.cancel())
+        self.canvas.bind('<Button-3>', lambda e: self.cancel())
+        self.bind('<Escape>', lambda e: self.cancel())
+
+        self.focus_force()
+
+    def on_press(self, event):
+        self.start_x = event.x
+        self.start_y = event.y
+        if self.rect_id:
+            self.canvas.delete(self.rect_id)
+        if self.tip_bg_id:
+            self.canvas.delete(self.tip_bg_id)
+        if self.tip_id:
+            self.canvas.delete(self.tip_id)
+        self.rect_id = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline='#00E676', width=2)
+        self.tip_bg_id = self.canvas.create_rectangle(event.x + 8, event.y + 12, event.x + 80, event.y + 30, fill='#212121', outline='white')
+        self.tip_id = self.canvas.create_text(event.x + 12, event.y + 14, text="0 × 0 px", fill="#00E676", font=('Arial', 9, 'bold'), anchor='nw')
+
+    def on_motion(self, event):
+        if self.start_x is None or self.start_y is None: return
+        self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
+        w = abs(event.x - self.start_x)
+        h = abs(event.y - self.start_y)
+        tx = max(event.x, self.start_x) + 8
+        ty = max(event.y, self.start_y) + 12
+        self.canvas.coords(self.tip_bg_id, tx, ty, tx + 80, ty + 18)
+        self.canvas.coords(self.tip_id, tx + 4, ty + 2)
+        self.canvas.itemconfig(self.tip_id, text=f"{w} × {h} px")
+
+    def on_release(self, event):
+        if self.start_x is None or self.start_y is None:
+            self.cancel()
+            return
+
+        x1, y1 = self.start_x, self.start_y
+        x2, y2 = event.x, event.y
+
+        rx1 = max(0, min(x1, x2))
+        rx2 = min(self.width, max(x1, x2))
+        ry1 = max(0, min(y1, y2))
+        ry2 = min(self.height, max(y1, y2))
+        cw = rx2 - rx1
+        ch = ry2 - ry1
+
+        if cw < 6 or ch < 6:
+            self.gui.auto.log("⚠️ 框選區域過小 (<6px)，已取消截圖")
+            self.cancel()
+            return
+
+        try:
+            crop_x1 = max(0, int(round(rx1 * self.scale_x)))
+            crop_x2 = min(self.full_screenshot.shape[1], int(round(rx2 * self.scale_x)))
+            crop_y1 = max(0, int(round(ry1 * self.scale_y)))
+            crop_y2 = min(self.full_screenshot.shape[0], int(round(ry2 * self.scale_y)))
+
+            actual_w = crop_x2 - crop_x1
+            actual_h = crop_y2 - crop_y1
+
+            if actual_w < 4 or actual_h < 4:
+                self.gui.auto.log("⚠️ 裁切尺寸過小，已取消截圖")
+                self.cancel()
+                return
+
+            cropped = self.full_screenshot[crop_y1:crop_y2, crop_x1:crop_x2]
+
+            save_path = get_image_path(self.target_filename)
+            bak_path = save_path + '.bak'
+
+            if os.path.exists(save_path) and not os.path.exists(bak_path):
+                shutil.copy2(save_path, bak_path)
+
+            success, enc_img = cv2.imencode('.png', cropped)
+            if success:
+                with open(save_path, 'wb') as f:
+                    f.write(enc_img)
+                self.gui.auto.log(f"✨ 成功框選更新模板圖片: {self.target_filename} (尺寸: {cw}x{ch}px)")
+                self.destroy()
+                self.callback(True, f"成功更新: {self.target_filename}")
+                return
+            else:
+                raise Exception("影像編碼失敗")
+        except Exception as e:
+            self.gui.auto.log(f"❌ 圖片儲存失敗: {e}")
+            self.destroy()
+            self.callback(False, str(e))
+
+    def cancel(self):
+        self.destroy()
+        self.callback(False, "已取消")
 
 
 def main():

@@ -37,3 +37,4 @@ arena_config.json
 scratch_*.py
 images/test_*.png
 images/*_fail.png
+*.bak
