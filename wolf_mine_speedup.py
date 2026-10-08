@@ -147,6 +147,10 @@ class FriendPatrolAutomation:
                 pt = self.gui.mine_coord
             elif self.gui.next_page_coord:
                 pt = self.gui.next_page_coord
+            elif getattr(self.gui, 'limit_confirm_coord', None):
+                pt = self.gui.limit_confirm_coord
+            elif getattr(self.gui, 'confirm_coord', None):
+                pt = self.gui.confirm_coord
 
             if pt and monitors:
                 px, py = pt
@@ -368,7 +372,13 @@ class FriendPatrolAutomation:
 
         self.log(f'🔍 辨識到「幫助很多好友」上限文字！(信心度: {val_txt*100:.1f}%)')
 
-        # 2. 確定有上限文字後，才定位彈窗的確定按鈕以供關閉
+        # 2. 確定有上限文字後，優先使用專屬設定的上限確定座標
+        if getattr(self.gui, 'limit_confirm_coord', None):
+            cx, cy = self.gui.limit_confirm_coord
+            self.log(f'🎯 使用專屬挖礦上限確定座標: ({cx}, {cy})')
+            return (cx, cy)
+
+        # 3. 未設專屬上限確定座標時，次之以影像辨識橘色確定按鈕
         pos_btn, val_btn, _ = self.find_image_multiscale(
             ['queding_orange.png'], 
             screenshot, 
@@ -432,28 +442,14 @@ class FriendPatrolAutomation:
 
         return clicked_fixed
 
-    def detect_and_click_confirm(self):
-        """偵測並點擊確定或關閉按鈕"""
-        for popup_img in ['queding_orange.png', 'queding.png', 'cha.png', 'bosscha.png', 'tacha.png', 'yaoqing_queding.png']:
-            if not self.running:
-                break
-            if self.click_image(popup_img, silent_fail=True):
-                self.log(f'✔ 偵測到並點擊彈窗按鈕: {popup_img}')
-                time.sleep(0.3)
-                if popup_img == 'yaoqing_queding.png' and self.gui.stop_on_invite_var.get():
-                    self.log('🛑 點擊到「邀請好友」確定按鈕（已達好友列表末端）！強制停止。')
-                    return 'invite_stop'
-                return True
-        return False
+
 
     def check_invite_popup_and_stop(self):
         """
         檢查是否出現「暫時不支持邀請好友」彈窗
         採用 Win32 API 原生視窗句柄偵測 (0.001s 100% 精準，支援 CefFlashBrowser 與所有系統對話框)
+        始終保持啟用 (Always on)
         """
-        if not self.gui.stop_on_invite_var.get():
-            return False
-
         user32 = ctypes.windll.user32
 
         # 1. 舊版獨立播放器偵測: flashplayerdesktop
@@ -785,6 +781,7 @@ class GUI:
         self.next_page_coord = None
         self.mine_coord = None
         self.confirm_coord = None
+        self.limit_confirm_coord = None
         self.capturing = False
         self.capture_mode = 'friend'
         self.temp_p1 = None
@@ -885,12 +882,14 @@ class GUI:
 
         cf = tk.Frame(control_frame)
         cf.pack(fill='x')
+        cf.columnconfigure(0, weight=1, uniform='ctrl_btn')
+        cf.columnconfigure(1, weight=1, uniform='ctrl_btn')
 
         self.start_btn = tk.Button(cf, text='啟動', command=self.auto.start_patrol, bg="#4CAF50", fg="white", font=('Arial', 10, 'bold'))
-        self.start_btn.pack(side='left', expand=True, fill='x', padx=2)
+        self.start_btn.grid(row=0, column=0, sticky='ew', padx=2)
 
         self.stop_btn = tk.Button(cf, text='停止 (F10)', command=self.auto.stop_patrol, bg="#f44336", fg="white", font=('Arial', 10, 'bold'), state='disabled')
-        self.stop_btn.pack(side='left', expand=True, fill='x', padx=2)
+        self.stop_btn.grid(row=0, column=1, sticky='ew', padx=2)
 
         # 功能選項區
         opt_frame = tk.LabelFrame(main, text='功能選項', padx=5, pady=2)
@@ -908,7 +907,6 @@ class GUI:
         tk.Checkbutton(of1, text='自動翻頁', variable=self.auto_page_var, font=('Arial', 8)).pack(side='left', padx=4)
 
         self.stop_on_invite_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(of1, text='遇邀請好友停止', variable=self.stop_on_invite_var, font=('Arial', 8)).pack(side='left', padx=4)
 
         # 敲狼草地區域設定
         # 📍 區域與座標配置 (草地/好友/翻頁/礦山)
@@ -918,18 +916,22 @@ class GUI:
         # 頂部指南按鈕列
         cb_head = tk.Frame(coord_box)
         cb_head.pack(fill='x', pady=(0, 2))
-        tk.Button(cb_head, text='❓ 操作指南', command=self.show_guide_dialog, bg="#009688", fg="white", font=('Arial', 8, 'bold')).pack(side='right', padx=1)
+        tk.Button(cb_head, text='操作指南', command=self.show_guide_dialog, bg="#009688", fg="white", font=('Arial', 8, 'bold')).pack(side='right', padx=1)
 
         # 行 1: 草地敲狼
         row_wolf = tk.Frame(coord_box)
         row_wolf.pack(fill='x', pady=1)
-        tk.Button(row_wolf, text='兩點框選草地', command=self.start_wolf_box_wizard, bg="#E65100", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Label(row_wolf, text='網格:', font=('Arial', 8)).pack(side='left', padx=(2, 0))
+        row_wolf.columnconfigure(0, weight=1)
+        tk.Button(row_wolf, text='框選草地', command=self.start_wolf_box_wizard, bg="#E65100", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=0, sticky='ew', padx=1)
+
+        f_grid = tk.Frame(row_wolf)
+        f_grid.grid(row=0, column=1, sticky='e', padx=1)
+        tk.Label(f_grid, text='網格:', font=('Arial', 8)).pack(side='left', padx=(2, 0))
         self.wolf_cols_var = tk.StringVar(value='3')
-        tk.Entry(row_wolf, textvariable=self.wolf_cols_var, width=2, font=('Arial', 8)).pack(side='left')
-        tk.Label(row_wolf, text='x', font=('Arial', 8)).pack(side='left')
+        tk.Entry(f_grid, textvariable=self.wolf_cols_var, width=2, font=('Arial', 8)).pack(side='left')
+        tk.Label(f_grid, text='x', font=('Arial', 8)).pack(side='left')
         self.wolf_rows_var = tk.StringVar(value='2')
-        tk.Entry(row_wolf, textvariable=self.wolf_rows_var, width=2, font=('Arial', 8)).pack(side='left')
+        tk.Entry(f_grid, textvariable=self.wolf_rows_var, width=2, font=('Arial', 8)).pack(side='left')
 
         def on_grid_change(*args):
             if not getattr(self, '_loading_config', False):
@@ -938,32 +940,35 @@ class GUI:
         self.wolf_cols_var.trace_add('write', on_grid_change)
         self.wolf_rows_var.trace_add('write', on_grid_change)
 
-        tk.Button(row_wolf, text='清空', command=self.clear_wolf_coords, font=('Arial', 8)).pack(side='left', padx=2)
-        self.wolf_info_lbl = tk.Label(row_wolf, text='(熱點: 5點)', font=('Arial', 8), fg='#B71C1C')
+        self.wolf_info_lbl = tk.Label(f_grid, text='(熱點: 5點)', font=('Arial', 8), fg='#B71C1C')
         self.wolf_info_lbl.pack(side='left', padx=2)
 
         # 行 2: 好友生成
         row_friend = tk.Frame(coord_box)
         row_friend.pack(fill='x', pady=1)
-        tk.Button(row_friend, text='兩點生成好友', command=self.start_two_point_wizard, bg="#2196F3", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Button(row_friend, text='清空', command=self.clear_friend_coords, font=('Arial', 8)).pack(side='left', padx=1)
+        row_friend.columnconfigure(0, weight=1)
+        tk.Button(row_friend, text='好友座標設定(兩點)', command=self.start_two_point_wizard, bg="#2196F3", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=0, sticky='ew', padx=1)
 
         # 行 3: 翻頁、礦山與確定座標
         row_aux = tk.Frame(coord_box)
         row_aux.pack(fill='x', pady=1)
-        tk.Button(row_aux, text='翻頁(K鍵)', command=self.start_capture_next_page, bg="#00897B", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Button(row_aux, text='礦山(K鍵)', command=self.start_capture_mine, bg="#F57C00", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Button(row_aux, text='確定按鈕(K鍵)', command=self.start_capture_confirm, bg="#009688", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=1)
-        tk.Button(row_aux, text='清空', command=self.clear_aux_coords, font=('Arial', 8)).pack(side='left', padx=1)
+        row_aux.columnconfigure(0, weight=1, uniform='aux_btn')
+        row_aux.columnconfigure(1, weight=1, uniform='aux_btn')
+        row_aux.columnconfigure(2, weight=1, uniform='aux_btn')
+        tk.Button(row_aux, text='翻頁', command=self.start_capture_next_page, bg="#00897B", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=0, sticky='ew', padx=1)
+        tk.Button(row_aux, text='礦山', command=self.start_capture_mine, bg="#F57C00", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=1, sticky='ew', padx=1)
+        tk.Button(row_aux, text='確定', command=self.start_capture_confirm, bg="#009688", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=2, sticky='ew', padx=1)
 
-        # 行 4: 標記預覽與截圖校正 (並排不佔額外垂直空間)
+        # 行 4: 標記預覽與挖礦上限彈窗配置 (並排不佔額外垂直空間)
         row_crop = tk.Frame(coord_box)
         row_crop.pack(fill='x', pady=1)
-        tk.Button(row_crop, text='🖥️ 標記預覽 (即時微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', expand=True, fill='x', padx=(0, 2))
-        tk.Button(row_crop, text='📸 截圖校正', command=self.open_image_crop_dialog, bg="#00897B", fg="white", font=('Arial', 8, 'bold')).pack(side='left', expand=True, fill='x', padx=(2, 0))
+        row_crop.columnconfigure(0, weight=1, uniform='crop_btn')
+        row_crop.columnconfigure(1, weight=1, uniform='crop_btn')
+        tk.Button(row_crop, text='標記預覽', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=0, sticky='ew', padx=(0, 2))
+        tk.Button(row_crop, text='挖礦上限', command=self.open_mine_limit_dialog, bg="#8E24AA", fg="white", font=('Arial', 8, 'bold')).grid(row=0, column=1, sticky='ew', padx=(2, 0))
 
         # 狀態列
-        self.coord_info_lbl = tk.Label(coord_box, text='好友: 0 | 翻頁: 自動 | 礦山: 未設定 | 確定: 自動辨識', font=('Arial', 8), fg='navy')
+        self.coord_info_lbl = tk.Label(coord_box, text='好友: 0 | 翻頁: 自動 | 礦山: 未設定\n確定: 自動辨識 | 上限確定: 自動辨識', font=('Arial', 8), fg='navy')
         self.coord_info_lbl.pack(fill='x', pady=1)
 
         # ⚙️ 運行參數配置 (按時間執行順序排列)
@@ -1027,7 +1032,7 @@ class GUI:
         tk.Label(threshold_control, text='彈窗辨識閾值(%):', font=('Arial', 8)).pack(side='left')
         self.threshold_var = tk.StringVar(value='70')
         tk.Entry(threshold_control, textvariable=self.threshold_var, width=5, font=('Arial', 8)).pack(side='left', padx=3)
-        tk.Label(threshold_control, text='(預設 70%，信心度高於此值視為彈窗)', font=('Arial', 8), fg='gray').pack(side='left', padx=3)
+        tk.Label(threshold_control, font=('Arial', 8), fg='gray').pack(side='left', padx=3)
 
         # 日誌區
         log_frame = tk.LabelFrame(main, text='日誌', padx=3, pady=2)
@@ -1050,6 +1055,7 @@ class GUI:
             'next_page_coord': self.next_page_coord,
             'mine_coord': self.mine_coord,
             'confirm_coord': self.confirm_coord,
+            'limit_confirm_coord': getattr(self, 'limit_confirm_coord', None),
             'load_delay': self.load_delay_var.get(),
             'wolf_cols': self.wolf_cols_var.get(),
             'wolf_rows': self.wolf_rows_var.get(),
@@ -1099,6 +1105,8 @@ class GUI:
                 self.mine_coord = tuple(data['mine_coord'])
             if data.get('confirm_coord'):
                 self.confirm_coord = tuple(data['confirm_coord'])
+            if data.get('limit_confirm_coord'):
+                self.limit_confirm_coord = tuple(data['limit_confirm_coord'])
             elif os.path.exists(os.path.join(BASE_DIR, 'arena_config.json')):
                 # 若 arena_config.json 中已有確認座標，自動載入作為預設值
                 try:
@@ -1206,8 +1214,9 @@ class GUI:
         self.next_page_coord = None
         self.mine_coord = None
         self.confirm_coord = None
+        self.limit_confirm_coord = None
         self.update_coords()
-        self.auto.log('已清空翻頁、礦山與確定座標')
+        self.auto.log('已清空翻頁、礦山、確定與上限確定座標')
         self.save_config()
 
     def start_wolf_box_wizard(self):
@@ -1226,6 +1235,11 @@ class GUI:
     def start_capture_confirm(self):
         self.capture_mode = 'confirm'
         self.start_capture('滑鼠移至獲獎/彈窗【確定按鈕】中心，按 K 鍵設定座標，ESC 取消')
+
+    def start_capture_limit_confirm(self, callback=None):
+        self.capture_mode = 'limit_confirm'
+        self.capture_callback = callback
+        self.start_capture('滑鼠移至挖礦上限彈窗【確定按鈕】中心，按 S 鍵 (或 K 鍵) 設定座標，ESC 取消')
 
     def start_two_point_wizard(self):
         self.capture_mode = 'p1'
@@ -1257,8 +1271,8 @@ class GUI:
             x, y = pyautogui.position()
             ix, iy = int(x), int(y)
 
-            # 統一所有添加功能均按 K 鍵 (相容 w 鍵)
-            if char in ('k', 'w'):
+            # 統一支援 K 鍵、W 鍵與專屬 S 鍵添加座標
+            if char in ('k', 'w', 's'):
                 if self.capture_mode == 'next_page':
                     self.next_page_coord = (ix, iy)
                     self.root.after(0, self.update_coords)
@@ -1275,6 +1289,16 @@ class GUI:
                     self.confirm_coord = (ix, iy)
                     self.root.after(0, self.update_coords)
                     self.root.after(0, lambda: self.auto.log(f'✔ 成功設定確定按鈕座標為: ({ix}, {iy})'))
+                    self.root.after(0, self.stop_capture)
+                    return False
+                elif self.capture_mode == 'limit_confirm':
+                    self.limit_confirm_coord = (ix, iy)
+                    self.root.after(0, self.update_coords)
+                    self.root.after(0, lambda: self.auto.log(f'✔ 成功設定挖礦上限確定按鈕座標為: ({ix}, {iy})'))
+                    cb = getattr(self, 'capture_callback', None)
+                    if cb:
+                        self.capture_callback = None
+                        self.root.after(0, cb)
                     self.root.after(0, self.stop_capture)
                     return False
                 elif self.capture_mode == 'p1':
@@ -1410,6 +1434,10 @@ class GUI:
             except Exception:
                 pass
         self.capturing = False
+        cb = getattr(self, 'capture_callback', None)
+        if cb:
+            self.capture_callback = None
+            self.root.after(0, cb)
         self.auto.log('結束座標添加')
         self.save_config()
 
@@ -1417,6 +1445,8 @@ class GUI:
         self.coordinates.clear()
         self.next_page_coord = None
         self.mine_coord = None
+        self.confirm_coord = None
+        self.limit_confirm_coord = None
         self.update_coords()
         self.auto.log('已清空所有座標')
         self.save_config()
@@ -1425,7 +1455,8 @@ class GUI:
         next_str = f"({self.next_page_coord[0]}, {self.next_page_coord[1]})" if self.next_page_coord else "自動"
         mine_str = f"({self.mine_coord[0]}, {self.mine_coord[1]})" if self.mine_coord else "未設定"
         confirm_str = f"({self.confirm_coord[0]}, {self.confirm_coord[1]})" if getattr(self, 'confirm_coord', None) else "自動辨識"
-        self.coord_info_lbl.config(text=f'好友: {len(self.coordinates)} | 翻頁: {next_str} | 礦山: {mine_str} | 確定: {confirm_str}')
+        limit_str = f"({self.limit_confirm_coord[0]}, {self.limit_confirm_coord[1]})" if getattr(self, 'limit_confirm_coord', None) else "自動辨識"
+        self.coord_info_lbl.config(text=f'好友: {len(self.coordinates)} | 翻頁: {next_str} | 礦山: {mine_str}\n確定: {confirm_str} | 上限確定: {limit_str}')
 
     def capture_screen(self):
         if hasattr(self, 'auto') and self.auto:
@@ -1453,14 +1484,13 @@ class GUI:
         """開啟畫面座標預覽比對彈窗"""
         PreviewDialog(self.root, self)
 
+    def open_mine_limit_dialog(self):
+        """開啟挖礦上限彈窗整合配置視窗 (文字截圖校正 & 專屬確定座標)"""
+        MineLimitConfigDialog(self.root, self)
+
     def open_image_crop_dialog(self):
-        """開啟圖像模板截圖校正視窗 (已自動精簡：固定座標項目免截圖，僅保留核心動態判定)"""
-        templates = [
-            ('shangxian_text.png', '挖礦上限文字 (狀態判定，無固定座標)'),
-            ('queding.png', '彈窗確定按鈕 (未設座標時備援，同步更新橘色確定)'),
-            ('cha.png', '通用關閉叉叉 (浮動彈窗關閉，同步更新各類叉叉)')
-        ]
-        ImageCropDialog(self.root, self, templates)
+        """相容舊版介面調用"""
+        self.open_mine_limit_dialog()
 
     def get_target_monitor_rect(self):
         """獲取遊戲座標所在螢幕的 (left, top, width, height)"""
@@ -1471,6 +1501,7 @@ class GUI:
             elif self.wolf_coords: pt = self.wolf_coords[0]
             elif self.mine_coord: pt = self.mine_coord
             elif self.next_page_coord: pt = self.next_page_coord
+            elif getattr(self, 'limit_confirm_coord', None): pt = self.limit_confirm_coord
             elif getattr(self, 'confirm_coord', None): pt = self.confirm_coord
 
             # 若未設定任何遊戲座標，自動鎖定當前滑鼠游標所在螢幕
@@ -1586,6 +1617,10 @@ class GUI:
         if getattr(self, 'confirm_coord', None):
             draw_marker(self.confirm_coord[0], self.confirm_coord[1], "🎯 確定按鈕", '#D81B60', radius=16, shape='rect')
 
+        # 6. 繪製挖礦上限確定按鈕座標 (紫羅蘭色 #8E24AA)
+        if getattr(self, 'limit_confirm_coord', None):
+            draw_marker(self.limit_confirm_coord[0], self.limit_confirm_coord[1], "🛑 上限確定", '#8E24AA', radius=16, shape='rect')
+
         # 頂部狀態資訊條
         dev_name = self.auto.detected_monitor_name or "主螢幕"
         info_banner = f"🖥️ 當前鎖定螢幕: {dev_name} ({pil_img.width}x{pil_img.height}) | 螢幕原點偏移: ({ox}, {oy})"
@@ -1613,7 +1648,8 @@ class GuideDialog(tk.Toplevel):
             "1. 🌾 兩點框選草地：移至草地【左上角】按 K，再移至【右下角】按 K。\n\n"
             "2. 👥 兩點生成好友：移至【第1位好友】頭像按 K，再移至【第6位】按 K。\n\n"
             "3. ⚡ 翻頁、礦山與確定座標：滑鼠移至按鈕上方按下 K 鍵即可設定。\n\n"
-            "4. 🖥️ 標記預覽：點擊「標記預覽」可在螢幕上直接拖曳微調所有點位。"
+            "4. 🛑 上限彈窗配置：點擊按鈕開啟專屬視窗，可框選校正上限文字或定位確定座標 (S/K鍵)。\n\n"
+            "5. 🖥️ 標記預覽：點擊「標記預覽」可在螢幕上直接拖曳微調所有點位。"
         )
 
         msg_lbl = tk.Label(main_f, text=text_msg, font=('Arial', 8), justify='left', anchor='w')
@@ -1626,7 +1662,7 @@ class GuideDialog(tk.Toplevel):
         chk = tk.Checkbutton(bottom_f, text="不再自動顯示此指南", variable=self.dont_show_var, font=('Arial', 8))
         chk.pack(side='left')
 
-        close_btn = tk.Button(bottom_f, text="我知道了", command=self.on_close, bg="#2196F3", fg="white", font=('Arial', 8, 'bold'), width=8)
+        close_btn = tk.Button(bottom_f, text="確定", command=self.on_close, bg="#2196F3", fg="white", font=('Arial', 8, 'bold'), width=8)
         close_btn.pack(side='right')
 
     def on_close(self):
@@ -1653,6 +1689,7 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.orig_mine_coord = list(self.gui.mine_coord) if self.gui.mine_coord else None
         self.orig_next_page_coord = list(self.gui.next_page_coord) if self.gui.next_page_coord else None
         self.orig_confirm_coord = list(self.gui.confirm_coord) if getattr(self.gui, 'confirm_coord', None) else None
+        self.orig_limit_confirm_coord = list(self.gui.limit_confirm_coord) if getattr(self.gui, 'limit_confirm_coord', None) else None
 
         # 當前編輯中的全域座標
         self.edit_coordinates = [list(pt) for pt in self.gui.coordinates]
@@ -1660,6 +1697,7 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.edit_mine_coord = list(self.gui.mine_coord) if self.gui.mine_coord else None
         self.edit_next_page_coord = list(self.gui.next_page_coord) if self.gui.next_page_coord else None
         self.edit_confirm_coord = list(self.gui.confirm_coord) if getattr(self.gui, 'confirm_coord', None) else None
+        self.edit_limit_confirm_coord = list(self.gui.limit_confirm_coord) if getattr(self.gui, 'limit_confirm_coord', None) else None
 
         self.wolf_box = None
         self.update_wolf_box_from_coords()
@@ -1775,13 +1813,13 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.status_lbl = tk.Label(self.ctrl_frame, text="💡 提示：按住標籤或圖示即可拖曳移動；拖曳四角縮放草地 | 【右鍵】或【ESC】關閉", font=('Microsoft JhengHei', 9, 'bold'), bg='#212121', fg='#FFEB3B')
         self.status_lbl.pack(side='left', padx=(0, 16))
 
-        save_btn = tk.Button(self.ctrl_frame, text="💾 儲存並套用", command=self.save_and_apply, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
+        save_btn = tk.Button(self.ctrl_frame, text="儲存", command=self.save_and_apply, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
         save_btn.pack(side='left', padx=4)
 
-        reset_btn = tk.Button(self.ctrl_frame, text="🔄 還原", command=self.reset_coords, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=6)
+        reset_btn = tk.Button(self.ctrl_frame, text="還原", command=self.reset_coords, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=6)
         reset_btn.pack(side='left', padx=4)
 
-        close_btn = tk.Button(self.ctrl_frame, text="❌ 關閉 (右鍵/ESC)", command=self.destroy, bg="#E53935", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
+        close_btn = tk.Button(self.ctrl_frame, text="關閉", command=self.destroy, bg="#E53935", fg="white", font=('Microsoft JhengHei', 9, 'bold'), padx=8)
         close_btn.pack(side='left', padx=4)
 
     def draw_overlay(self):
@@ -1887,6 +1925,10 @@ class ScreenOverlayDialog(tk.Toplevel):
         if self.edit_confirm_coord:
             draw_pin(self.edit_confirm_coord[0], self.edit_confirm_coord[1], "🎯 確定", '#D81B60', {'type': 'confirm'}, shape='rect', radius=18)
 
+        # 6. 上限確定按鈕 (紫羅蘭色)
+        if self.edit_limit_confirm_coord:
+            draw_pin(self.edit_limit_confirm_coord[0], self.edit_limit_confirm_coord[1], "🛑 上限確定", '#8E24AA', {'type': 'limit_confirm'}, shape='rect', radius=18)
+
     def on_hover(self, event):
         """滑鼠懸停時動態切換游標樣式"""
         mx, my = event.x, event.y
@@ -1920,6 +1962,7 @@ class ScreenOverlayDialog(tk.Toplevel):
 
         # 3. 檢測是否在單點圖示上
         targets = []
+        if self.edit_limit_confirm_coord: targets.append((self.edit_limit_confirm_coord, 22))
         if self.edit_confirm_coord: targets.append((self.edit_confirm_coord, 22))
         if self.edit_mine_coord: targets.append((self.edit_mine_coord, 20))
         if self.edit_next_page_coord: targets.append((self.edit_next_page_coord, 20))
@@ -1973,6 +2016,10 @@ class ScreenOverlayDialog(tk.Toplevel):
                     self.drag_info = {'type': 'confirm', 'start_pt': list(self.edit_confirm_coord)}
                     self.status_lbl.config(text="🎯 正在移動【確定按鈕】座標...", fg="#FF4081")
                     return
+                elif ttype == 'limit_confirm':
+                    self.drag_info = {'type': 'limit_confirm', 'start_pt': list(self.edit_limit_confirm_coord)}
+                    self.status_lbl.config(text="🛑 正在移動【上限確定】座標...", fg="#BA68C8")
+                    return
                 elif ttype == 'mine':
                     self.drag_info = {'type': 'mine', 'start_pt': list(self.edit_mine_coord)}
                     self.status_lbl.config(text="⛏️ 正在移動【礦山座標】...", fg="#FFB300")
@@ -1992,10 +2039,15 @@ class ScreenOverlayDialog(tk.Toplevel):
                     self.status_lbl.config(text=f"🐺 正在微調【敲狼點 W{w_idx+1}】座標...", fg="#FF7043")
                     return
 
-        # 3. 檢測單點圖示本體 (確定 > 礦山 > 翻頁 > 好友 > 敲狼熱點)
+        # 3. 檢測單點圖示本體 (確定 > 上限確定 > 礦山 > 翻頁 > 好友 > 敲狼熱點)
         if self.edit_confirm_coord and (gx - self.edit_confirm_coord[0]) ** 2 + (gy - self.edit_confirm_coord[1]) ** 2 <= 24 ** 2:
             self.drag_info = {'type': 'confirm', 'start_pt': list(self.edit_confirm_coord)}
             self.status_lbl.config(text="🎯 正在移動【確定按鈕】座標...", fg="#FF4081")
+            return
+
+        if self.edit_limit_confirm_coord and (gx - self.edit_limit_confirm_coord[0]) ** 2 + (gy - self.edit_limit_confirm_coord[1]) ** 2 <= 24 ** 2:
+            self.drag_info = {'type': 'limit_confirm', 'start_pt': list(self.edit_limit_confirm_coord)}
+            self.status_lbl.config(text="🛑 正在移動【上限確定】座標...", fg="#BA68C8")
             return
 
         if self.edit_mine_coord and (gx - self.edit_mine_coord[0]) ** 2 + (gy - self.edit_mine_coord[1]) ** 2 <= 22 ** 2:
@@ -2046,6 +2098,11 @@ class ScreenOverlayDialog(tk.Toplevel):
             sp = self.drag_info['start_pt']
             self.edit_confirm_coord = [sp[0] + dx, sp[1] + dy]
             self.status_lbl.config(text=f"🎯 確定按鈕新座標: ({self.edit_confirm_coord[0]}, {self.edit_confirm_coord[1]})")
+
+        elif dtype == 'limit_confirm':
+            sp = self.drag_info['start_pt']
+            self.edit_limit_confirm_coord = [sp[0] + dx, sp[1] + dy]
+            self.status_lbl.config(text=f"🛑 上限確定新座標: ({self.edit_limit_confirm_coord[0]}, {self.edit_limit_confirm_coord[1]})")
 
         elif dtype == 'mine':
             sp = self.drag_info['start_pt']
@@ -2118,6 +2175,8 @@ class ScreenOverlayDialog(tk.Toplevel):
             self.gui.next_page_coord = tuple(self.edit_next_page_coord)
         if self.edit_confirm_coord:
             self.gui.confirm_coord = tuple(self.edit_confirm_coord)
+        if self.edit_limit_confirm_coord:
+            self.gui.limit_confirm_coord = tuple(self.edit_limit_confirm_coord)
 
         self.gui.update_coords()
         self.gui.update_wolf_info()
@@ -2132,6 +2191,7 @@ class ScreenOverlayDialog(tk.Toplevel):
         self.edit_mine_coord = list(self.orig_mine_coord) if self.orig_mine_coord else None
         self.edit_next_page_coord = list(self.orig_next_page_coord) if self.orig_next_page_coord else None
         self.edit_confirm_coord = list(self.orig_confirm_coord) if self.orig_confirm_coord else None
+        self.edit_limit_confirm_coord = list(self.orig_limit_confirm_coord) if self.orig_limit_confirm_coord else None
 
         self.update_wolf_box_from_coords()
         self.draw_overlay()
@@ -2166,7 +2226,7 @@ class PreviewDialog(tk.Toplevel):
         self.info_lbl = tk.Label(top_bar, text="正在獲取遊戲畫面...", font=('Arial', 10, 'bold'), bg='#263238', fg='#ECEFF1')
         self.info_lbl.pack(side='left', padx=4)
 
-        refresh_btn = tk.Button(top_bar, text="🔄 刷新當前畫面", command=self.refresh_preview, bg="#4CAF50", fg="white", font=('Arial', 9, 'bold'))
+        refresh_btn = tk.Button(top_bar, text="刷新", command=self.refresh_preview, bg="#4CAF50", fg="white", font=('Arial', 9, 'bold'))
         refresh_btn.pack(side='left', padx=10)
 
         close_btn = tk.Button(top_bar, text="關閉", command=self.destroy, font=('Arial', 9), width=8)
@@ -2175,7 +2235,7 @@ class PreviewDialog(tk.Toplevel):
         # 底部圖例標籤列
         legend_bar = tk.Frame(self, padx=10, pady=5, bg='#ECEFF1')
         legend_bar.pack(fill='x', side='bottom')
-        legend_text = "● 藍圈: 好友點位 (#1~#6)  |  🌾 橘框: 敲狼草地與熱點 (W1~Wn)  |  ⏩ 綠色: 翻頁  |  ⛏️ 金色: 礦山  |  🎯 紅框: 確定按鈕"
+        legend_text = "● 藍: 好友  |  🌾 橘: 草地熱點  |  ⏩ 綠: 翻頁  |  ⛏️ 金: 礦山  |  🎯 紅: 一般確定  |  🛑 紫: 上限確定"
         tk.Label(legend_bar, text=legend_text, font=('Arial', 9, 'bold'), bg='#ECEFF1', fg='#37474F').pack(side='left')
 
         # 中間預覽圖片展示區
@@ -2209,74 +2269,98 @@ class PreviewDialog(tk.Toplevel):
         self.info_lbl.config(text=f"✔ 原始解析度: {orig_w}x{orig_h} | 縮放顯示: {pct}% | 請比對圖示紅點是否對齊按鈕！")
 
 
-class ImageCropDialog(tk.Toplevel):
-    """圖像模板截圖校正視窗 (讓使用者能自訂選擇並框選替換模板圖片)"""
-    def __init__(self, parent, gui, template_choices):
+class MineLimitConfigDialog(tk.Toplevel):
+    """挖礦上限彈窗整合配置視窗 (上限文字截圖校正 + 專屬確定按鈕座標)"""
+    def __init__(self, parent, gui):
         super().__init__(parent)
         self.gui = gui
-        self.template_choices = template_choices
-        self.title("📸 圖像模板截圖校正")
-        self.geometry("390x320")
+        self.target_filename = 'shangxian_text.png'
+        self.title("🛑 挖礦上限彈窗配置")
+        self.geometry("420x420")
         self.attributes('-topmost', True)
         self.resizable(False, False)
 
-        top_frame = tk.Frame(self, padx=10, pady=8, bg='#263238')
+        top_frame = tk.Frame(self, padx=12, pady=8, bg='#263238')
         top_frame.pack(fill='x')
-        tk.Label(top_frame, text="📸 選擇目標圖案並進行螢幕框選替換", font=('Microsoft JhengHei', 10, 'bold'), bg='#263238', fg='#ECEFF1').pack(anchor='w')
-        tk.Label(top_frame, text="若遊戲改版或解析度不同導致無法辨識，可在畫面上直接拉框重新截圖。", font=('Microsoft JhengHei', 8), bg='#263238', fg='#B0BEC5').pack(anchor='w')
+        tk.Label(top_frame, text="🛑 挖礦上限彈窗專屬配置", font=('Microsoft JhengHei', 10, 'bold'), bg='#263238', fg='#ECEFF1').pack(anchor='w')
+        tk.Label(top_frame, text="整合「幫助很多好友」上限文字辨識與「專屬確定按鈕」點擊座標。", font=('Microsoft JhengHei', 8), bg='#263238', fg='#B0BEC5').pack(anchor='w')
 
         content_frame = tk.Frame(self, padx=12, pady=10)
         content_frame.pack(fill='both', expand=True)
 
-        row_sel = tk.Frame(content_frame)
-        row_sel.pack(fill='x', pady=4)
-        tk.Label(row_sel, text="目標圖案:", font=('Microsoft JhengHei', 9, 'bold')).pack(side='left', padx=(0, 6))
+        # 區塊 1: 挖礦上限文字辨識 (截圖校正)
+        box_ocr = tk.LabelFrame(content_frame, text="① 挖礦上限文字辨識 (截圖校正)", font=('Microsoft JhengHei', 9, 'bold'), padx=8, pady=8)
+        box_ocr.pack(fill='x', pady=(0, 10))
 
-        self.combo_var = tk.StringVar()
-        display_names = [f"{name} ({fname})" for fname, name in self.template_choices]
-        self.combo = ttk.Combobox(row_sel, textvariable=self.combo_var, values=display_names, state='readonly', font=('Microsoft JhengHei', 9))
-        self.combo.pack(side='left', fill='x', expand=True)
-        self.combo.current(0)
-        self.combo.bind('<<ComboboxSelected>>', lambda e: self.update_preview())
+        row_preview = tk.Frame(box_ocr)
+        row_preview.pack(fill='x')
 
-        preview_box = tk.LabelFrame(content_frame, text="當前模板預覽", font=('Microsoft JhengHei', 8), padx=8, pady=6)
-        preview_box.pack(fill='both', expand=True, pady=6)
-
-        self.img_lbl = tk.Label(preview_box, bg='#E0E0E0', width=16, height=4)
+        self.img_lbl = tk.Label(row_preview, bg='#E0E0E0', width=16, height=3)
         self.img_lbl.pack(side='left', padx=(0, 10))
 
-        info_f = tk.Frame(preview_box)
+        info_f = tk.Frame(row_preview)
         info_f.pack(side='left', fill='both', expand=True)
         self.info_size_lbl = tk.Label(info_f, text="尺寸: -", font=('Microsoft JhengHei', 8), anchor='w')
         self.info_size_lbl.pack(fill='x')
         self.info_status_lbl = tk.Label(info_f, text="狀態: -", font=('Microsoft JhengHei', 8), anchor='w')
         self.info_status_lbl.pack(fill='x')
 
-        btn_box = tk.Frame(content_frame)
-        btn_box.pack(fill='x', pady=6)
-
-        self.crop_btn = tk.Button(btn_box, text="🖱️ 開始螢幕框選截圖", command=self.start_crop_process, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 9, 'bold'), pady=3)
+        btn_box1 = tk.Frame(box_ocr)
+        btn_box1.pack(fill='x', pady=(8, 2))
+        self.crop_btn = tk.Button(btn_box1, text="截圖校正", command=self.start_crop_process, bg="#4CAF50", fg="white", font=('Microsoft JhengHei', 8, 'bold'), pady=3)
         self.crop_btn.pack(side='left', fill='x', expand=True, padx=(0, 4))
-
-        self.restore_btn = tk.Button(btn_box, text="🔄 還原備份", command=self.restore_backup, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 9), pady=3)
+        self.restore_btn = tk.Button(btn_box1, text="還原備份", command=self.restore_backup, bg="#FF9800", fg="white", font=('Microsoft JhengHei', 8), pady=3)
         self.restore_btn.pack(side='left', padx=2)
 
-        close_btn = tk.Button(btn_box, text="關閉", command=self.destroy, font=('Microsoft JhengHei', 9), pady=3, width=6)
-        close_btn.pack(side='left', padx=(4, 0))
+        # 區塊 2: 專屬確定按鈕座標
+        box_coord = tk.LabelFrame(content_frame, text="② 專屬確定按鈕座標", font=('Microsoft JhengHei', 9, 'bold'), padx=8, pady=8)
+        box_coord.pack(fill='x', pady=(0, 10))
+
+        tk.Label(box_coord, text="彈出「幫助很多好友」上限時，優先點擊此專屬座標關閉彈窗並停止挖礦。", font=('Microsoft JhengHei', 8), fg='#546E7A', justify='left').pack(anchor='w', pady=(0, 4))
+
+        self.coord_lbl = tk.Label(box_coord, text="當前座標: 未設定", font=('Microsoft JhengHei', 9, 'bold'), fg='#B71C1C', anchor='w')
+        self.coord_lbl.pack(fill='x', pady=2)
+
+        btn_box2 = tk.Frame(box_coord)
+        btn_box2.pack(fill='x', pady=(6, 2))
+        self.set_coord_btn = tk.Button(btn_box2, text="定位座標", command=self.start_coord_capture, bg="#8E24AA", fg="white", font=('Microsoft JhengHei', 8, 'bold'), pady=3)
+        self.set_coord_btn.pack(fill='x', expand=True)
+
+        # 底部操作列
+        bottom_f = tk.Frame(content_frame)
+        bottom_f.pack(fill='x', side='bottom')
+        close_btn = tk.Button(bottom_f, text="關閉", command=self.destroy, font=('Microsoft JhengHei', 9), pady=3, width=8)
+        close_btn.pack(side='right')
 
         self.photo_cache = None
         self.update_preview()
+        self.update_coord_display()
 
-    def get_selected_filename(self):
-        idx = self.combo.current()
-        if 0 <= idx < len(self.template_choices):
-            return self.template_choices[idx][0]
-        return None
+    def update_coord_display(self):
+        if getattr(self.gui, 'limit_confirm_coord', None):
+            cx, cy = self.gui.limit_confirm_coord
+            self.coord_lbl.config(text=f"當前座標: ({cx}, {cy}) ✔", fg="#2E7D32")
+        else:
+            self.coord_lbl.config(text="當前座標: 未設定 (自動辨識橘色確定按鈕備援)", fg="#B71C1C")
+
+    def start_coord_capture(self):
+        self.withdraw()
+        def on_done():
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.update_coord_display()
+        self.gui.start_capture_limit_confirm(callback=on_done)
+
+    def clear_coord(self):
+        self.gui.limit_confirm_coord = None
+        self.gui.update_coords()
+        self.gui.save_config()
+        self.gui.auto.log('已清空挖礦上限專屬確定座標')
+        self.update_coord_display()
 
     def update_preview(self):
-        fname = self.get_selected_filename()
-        if not fname:
-            return
+        fname = self.target_filename
         path = get_image_path(fname)
         bak_path = path + '.bak'
 
@@ -2290,7 +2374,7 @@ class ImageCropDialog(tk.Toplevel):
                 self.info_status_lbl.config(text=status_txt, fg="#1565C0" if os.path.exists(bak_path) else "#37474F")
                 self.restore_btn.config(state='normal' if os.path.exists(bak_path) else 'disabled')
 
-                scale = min(120 / max(1, w), 60 / max(1, h), 1.0)
+                scale = min(120 / max(1, w), 50 / max(1, h), 1.0)
                 tw, th = max(1, int(w * scale)), max(1, int(h * scale))
                 resized = pil_img.resize((tw, th), Image.Resampling.LANCZOS)
                 self.photo_cache = ImageTk.PhotoImage(resized)
@@ -2305,16 +2389,8 @@ class ImageCropDialog(tk.Toplevel):
             self.restore_btn.config(state='disabled')
 
     def restore_backup(self):
-        fname = self.get_selected_filename()
-        if not fname: return
-        related_files = [fname]
-        if fname in ('queding.png', 'queding_orange.png'):
-            related_files = ['queding.png', 'queding_orange.png', 'yaoqing_queding.png']
-        elif fname in ('cha.png', 'bosscha.png', 'tacha.png'):
-            related_files = ['cha.png', 'bosscha.png', 'tacha.png']
-        elif fname in ('shangxian_text.png', 'shangxian_short.png'):
-            related_files = ['shangxian_text.png', 'shangxian_short.png']
-
+        fname = self.target_filename
+        related_files = ['shangxian_text.png', 'shangxian_short.png']
         restored_count = 0
         for f in related_files:
             p = get_image_path(f)
@@ -2328,17 +2404,15 @@ class ImageCropDialog(tk.Toplevel):
 
         if restored_count > 0:
             self.update_preview()
-            self.gui.auto.log(f"🔄 已還原圖片: {fname} (包含關聯檔案) 至初始備份狀態")
-            messagebox.showinfo("還原成功", f"已成功將 {fname} (共 {restored_count} 個關聯檔案) 還原至初始備份！", parent=self)
+            self.gui.auto.log(f"🔄 已還原挖礦上限文字圖片至初始備份狀態")
+            messagebox.showinfo("還原成功", f"已成功將挖礦上限文字模板還原至初始備份！", parent=self)
         else:
             messagebox.showwarning("提示", "找不到初始備份檔 (.bak) 可供還原", parent=self)
 
     def start_crop_process(self):
-        fname = self.get_selected_filename()
-        if not fname: return
+        fname = self.target_filename
         self.withdraw()
         self.update()
-        # 延遲 150ms 確保校正視窗完全從螢幕隱藏後再截圖
         self.after(150, lambda: CropSelectorOverlay(self, self.gui, fname, self.on_crop_complete))
 
     def on_crop_complete(self, success, msg):
