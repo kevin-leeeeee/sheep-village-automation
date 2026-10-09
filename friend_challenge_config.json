@@ -1,6 +1,6 @@
 {
-  "wolf_friends": "",
-  "defense_friends": "4",
+  "wolf_friends": "1,4,8,10,11",
+  "defense_friends": "",
   "camp_coord": [
     3188,
     207
@@ -92,8 +92,8 @@
       907
     ]
   ],
-  "dispatch_wolves": "1",
-  "initial_delay": "3",
+  "dispatch_wolves": "3",
+  "initial_delay": "40",
   "load_delay": "3",
   "topmost": true,
   "gohome_coord": [
@@ -113,5 +113,6 @@
     630
   ],
   "poll_interval": "5",
-  "threshold": "0.9"
+  "threshold": "0.9",
+  "challenge_mode": "wolf"
 }
