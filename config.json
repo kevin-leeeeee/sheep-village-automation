@@ -82,9 +82,10 @@
     218
   ],
   "confirm_coord": [
-    2509,
-    576
+    2517,
+    598
   ],
+  "limit_confirm_coord": null,
   "load_delay": "3",
   "wolf_cols": "5",
   "wolf_rows": "2",
@@ -96,9 +97,9 @@
   "mine_delay": "1.5",
   "confirm_delay": "0.5",
   "threshold": "80",
-  "skip_friend_idx": "2",
+  "skip_friend_idx": "58",
   "wolf_var": true,
-  "mining_var": true,
+  "mining_var": false,
   "auto_page_var": true,
   "stop_on_invite_var": true,
   "topmost": true,

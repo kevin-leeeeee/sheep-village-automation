@@ -45,9 +45,21 @@ from datetime import datetime
 # 取得圖片與設定目錄路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, 'images')
+CUSTOM_IMAGE_DIR = os.path.join(IMAGE_DIR, 'custom')
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 
-def get_image_path(filename):
+def get_image_path(filename, for_saving=False):
+    """
+    圖片路徑取得 (方案 A: 自訂圖片優先):
+    - 若 for_saving=True: 返回 images/custom/ 路徑 (儲存自訂截圖，不影響 Git 原版)
+    - 若 for_saving=False: 優先尋找 images/custom/ 中的自訂截圖，不存在則回退到 images/ 原版圖片
+    """
+    custom_path = os.path.join(CUSTOM_IMAGE_DIR, filename)
+    if for_saving:
+        os.makedirs(CUSTOM_IMAGE_DIR, exist_ok=True)
+        return custom_path
+    if os.path.exists(custom_path):
+        return custom_path
     return os.path.join(IMAGE_DIR, filename)
 
 def center_window_on_cursor(root, width, height):
@@ -292,6 +304,8 @@ class FriendPatrolAutomation:
         best_val = -1
         best_loc = None
         best_size = (0, 0)
+        best_file = None
+        best_scale = 1.0
 
         if use_gray:
             gray_screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
@@ -326,6 +340,10 @@ class FriendPatrolAutomation:
                     best_val = max_val
                     best_loc = max_loc
                     best_size = (target_w, target_h)
+                    best_file = filename
+                    best_scale = s
+
+        self.last_match_info = {'val': best_val, 'file': best_file, 'scale': best_scale}
 
         if best_val >= threshold and best_loc is not None:
             cx = best_loc[0] + best_size[0] // 2
@@ -355,22 +373,38 @@ class FriendPatrolAutomation:
         return False
 
     def check_mine_limit_popup(self, screenshot=None):
-        """專門檢查是否出現『你今天已經幫助很多好友了』上限彈窗 (必須明確辨識到上限文字)"""
+        """專門檢查是否出現『你今天已經幫助很多好友了』上限彈窗 (每次偵測均輸出匹配度以供排查)"""
         if screenshot is None:
             screenshot = self.capture_screen()
         if screenshot is None:
             return None
 
-        # 1. 必須明確檢測到上限文字標籤 (如：幫助很多好友了)
+        # 讀取當前設定之辨識門檻
+        try:
+            th = float(self.gui.threshold_var.get()) / 100.0
+        except Exception:
+            th = 0.65
+
+        # 1. 檢測上限文字標籤 (如：幫助很多好友了)
         pos_txt, val_txt, _ = self.find_image_multiscale(
             ['shangxian_short.png', 'shangxian_text.png'], 
             screenshot, 
-            scales=(0.85, 1.0, 1.15)
+            scales=(0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.25, 1.4),
+            min_threshold=th
         )
+
+        match_info = getattr(self, 'last_match_info', {})
+        best_f = match_info.get('file', '無')
+        best_s = match_info.get('scale', 1.0)
+
+        # 每次偵測均完整輸出匹配度日誌
+        if pos_txt:
+            self.log(f'🔍 [上限偵測] 命中「幫助好友」！匹配度: {val_txt*100:.1f}% (門檻: {th*100:.1f}%, 範本: {best_f}, 縮放: {best_s}x)')
+        else:
+            self.log(f'🔍 [上限偵測] 檢測「幫助好友」: 最高匹配度 {val_txt*100:.1f}% (門檻: {th*100:.1f}%, 範本: {best_f}, 縮放: {best_s}x) -> ✖ 未達門檻')
+
         if not pos_txt:
             return None
-
-        self.log(f'🔍 辨識到「幫助很多好友」上限文字！(信心度: {val_txt*100:.1f}%)')
 
         # 2. 確定有上限文字後，優先使用專屬設定的上限確定座標
         if getattr(self.gui, 'limit_confirm_coord', None):
@@ -387,11 +421,14 @@ class FriendPatrolAutomation:
         if pos_btn:
             cx = pos_btn[0] + self.monitor_offset_x
             cy = pos_btn[1] + self.monitor_offset_y
+            self.log(f'🎯 影像辨識橘色確定按鈕匹配成功 (匹配度: {val_btn*100:.1f}%) -> ({cx}, {cy})')
         elif getattr(self.gui, 'confirm_coord', None):
             cx, cy = self.gui.confirm_coord
+            self.log(f'🎯 使用一般確定座標作為備援: ({cx}, {cy})')
         else:
             cx = pos_txt[0] + self.monitor_offset_x
             cy = pos_txt[1] + self.monitor_offset_y + 135
+            self.log(f'🎯 使用相對偏移座標點擊確定: ({cx}, {cy})')
         return (cx, cy)
 
     def handle_confirm_popup(self, stage_name=""):
@@ -400,6 +437,21 @@ class FriendPatrolAutomation:
             c_delay = float(self.gui.confirm_delay_var.get())
         except Exception:
             c_delay = 0.2
+
+        # 礦山階段：在點擊確定之前，先檢查一次是否已經直接跳出上限彈窗
+        if stage_name == '礦山點擊完畢':
+            shot_pre = self.capture_screen()
+            limit_pos_pre = self.check_mine_limit_popup(shot_pre)
+            if limit_pos_pre:
+                lx, ly = limit_pos_pre
+                pyautogui.leftClick(lx, ly)
+                time.sleep(c_delay + 0.2)
+                if self.gui.mining_var.get():
+                    self.gui.mining_var.set(False)
+                    self.log('🛑 [上限觸發] 點擊礦山後直接偵測到「你今天已經幫助很多好友了」上限彈窗！已點擊關閉，並自動關閉【⚡ 挖礦加速】。後續將專心敲狼。')
+                else:
+                    self.log(f'🛑 點擊礦山後直接偵測到上限特殊彈窗！已點擊關閉: ({lx}, {ly})')
+                return True
 
         # 1. 優先執行當前步驟的點擊確定操作
         clicked_fixed = False
@@ -773,7 +825,7 @@ class GUI:
         self.root = root
         admin_status = "【管理員】" if is_admin() else "【普通用戶】"
         self.root.title(f"保衛羊村 - 敲狼加速礦 {admin_status}")
-        center_window_on_cursor(self.root, 425, 680)
+        center_window_on_cursor(self.root, 450, 760)
         self.coordinates = []
         self.wolf_coords = []
         self.wolf_box = None
@@ -1038,12 +1090,13 @@ class GUI:
         log_frame = tk.LabelFrame(main, text='日誌', padx=3, pady=2)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=2)
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=5, font=('Arial', 8))
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, font=('Arial', 9))
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
         bottom_f = tk.Frame(main)
         bottom_f.pack(fill='x', pady=2)
         tk.Button(bottom_f, text='清空日誌', command=self.clear_log, font=('Arial', 8)).pack(side='left')
+        tk.Button(bottom_f, text='🧪 測試上限辨識', command=self.test_mine_limit_detection, font=('Arial', 8, 'bold'), bg='#E1BEE7').pack(side='left', padx=4)
         tk.Label(bottom_f, text='[←]上一個 | [→]下一個 | [F10]停止', font=('Arial', 8), fg='gray').pack(side='right')
 
     def save_config(self):
@@ -1191,6 +1244,15 @@ class GUI:
 
     def clear_log(self):
         self.log_text.delete('1.0', tk.END)
+
+    def test_mine_limit_detection(self):
+        """立即對當前畫面進行上限彈窗辨識測試並輸出結果至日誌"""
+        self.auto.log("🧪 正在截圖並測試「幫助好友」上限彈窗辨識...")
+        res = self.auto.check_mine_limit_popup()
+        if res:
+            self.auto.log(f"🎉 測試成功！偵測到上限彈窗，確定座標為: {res}")
+        else:
+            self.auto.log("⚠ 測試未通過：最高匹配度未達設定之門檻 (請見上方數值)。")
 
     def update_wolf_info(self):
         cnt = len(self.wolf_coords)
@@ -1421,9 +1483,9 @@ class GUI:
 
             screenshot = pyautogui.screenshot(region=(min_x, min_y, width, height))
             for fname in filenames:
-                save_path = get_image_path(fname)
+                save_path = get_image_path(fname, for_saving=True)
                 screenshot.save(save_path)
-            self.auto.log(f'✨ 成功框選截圖並自動覆蓋存檔: {", ".join(filenames)} (尺寸: {width}x{height}px)！當前裝置辨識已 100% 校正。')
+            self.auto.log(f'✨ 成功框選截圖並儲存至 custom 自訂目錄: {", ".join(filenames)} (尺寸: {width}x{height}px，Git 永不覆蓋)！')
         except Exception as e:
             self.auto.log(f'❌ 截圖覆蓋失敗: {e}')
 
@@ -2562,13 +2624,10 @@ class CropSelectorOverlay(tk.Toplevel):
             success, enc_img = cv2.imencode('.png', cropped)
             if success:
                 for fname in related_files:
-                    save_path = get_image_path(fname)
-                    bak_path = save_path + '.bak'
-                    if os.path.exists(save_path) and not os.path.exists(bak_path):
-                        shutil.copy2(save_path, bak_path)
+                    save_path = get_image_path(fname, for_saving=True)
                     with open(save_path, 'wb') as f:
                         f.write(enc_img)
-                self.gui.auto.log(f"✨ 成功框選更新模板圖片: {self.target_filename} (已同步更新關聯檔案, 尺寸: {cw}x{ch}px)")
+                self.gui.auto.log(f"✨ 成功框選更新自訂模板: {self.target_filename} (已存至 images/custom/，永久不受 Git 覆蓋！尺寸: {cw}x{ch}px)")
                 self.destroy()
                 self.callback(True, f"成功更新: {self.target_filename}")
                 return

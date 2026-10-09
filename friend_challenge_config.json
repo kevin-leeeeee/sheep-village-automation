@@ -1,0 +1,117 @@
+{
+  "wolf_friends": "",
+  "defense_friends": "4",
+  "camp_coord": [
+    3188,
+    207
+  ],
+  "defense_coord": [
+    3275,
+    586
+  ],
+  "challenge_btn_coord": [
+    3612,
+    953
+  ],
+  "start_battle_coord": [
+    3303,
+    624
+  ],
+  "confirm_btn_coord": [
+    3125,
+    726
+  ],
+  "coordinates": [
+    [
+      2683,
+      907
+    ],
+    [
+      2820,
+      905
+    ],
+    [
+      2957,
+      904
+    ],
+    [
+      3094,
+      902
+    ],
+    [
+      3231,
+      901
+    ],
+    [
+      3369,
+      900
+    ]
+  ],
+  "next_page_coord": [
+    3473,
+    955
+  ],
+  "action_delay": "1.5",
+  "wait_timeout": "90",
+  "dispatch_mode": "manual",
+  "auto_queue_coord": [
+    3163,
+    628
+  ],
+  "wolf_slots": [
+    [
+      2727,
+      900
+    ],
+    [
+      2845,
+      901
+    ],
+    [
+      2964,
+      902
+    ],
+    [
+      3083,
+      903
+    ],
+    [
+      3202,
+      904
+    ],
+    [
+      3321,
+      905
+    ],
+    [
+      3440,
+      906
+    ],
+    [
+      3559,
+      907
+    ]
+  ],
+  "dispatch_wolves": "1",
+  "initial_delay": "3",
+  "load_delay": "3",
+  "topmost": true,
+  "gohome_coord": [
+    2681,
+    790
+  ],
+  "territory_coord": [
+    2826,
+    403
+  ],
+  "withdraw_coord": [
+    2913,
+    565
+  ],
+  "withdraw_confirm_coord": [
+    3230,
+    630
+  ],
+  "poll_interval": "5",
+  "threshold": "0.9"
+}

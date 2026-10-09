@@ -46,9 +46,16 @@ import pynput
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, 'images')
+CUSTOM_IMAGE_DIR = os.path.join(IMAGE_DIR, 'custom')
 CONFIG_FILE = os.path.join(BASE_DIR, 'arena_config.json')
 
-def get_image_path(filename):
+def get_image_path(filename, for_saving=False):
+    custom_path = os.path.join(CUSTOM_IMAGE_DIR, filename)
+    if for_saving:
+        os.makedirs(CUSTOM_IMAGE_DIR, exist_ok=True)
+        return custom_path
+    if os.path.exists(custom_path):
+        return custom_path
     return os.path.join(IMAGE_DIR, filename)
 
 def center_window_on_cursor(root, width, height):
@@ -1736,17 +1743,13 @@ class CropSelectorOverlay(tk.Toplevel):
 
             cropped = self.full_screenshot[crop_y1:crop_y2, crop_x1:crop_x2]
 
-            save_path = get_image_path(self.target_filename)
-            bak_path = save_path + '.bak'
-
-            if os.path.exists(save_path) and not os.path.exists(bak_path):
-                shutil.copy2(save_path, bak_path)
+            save_path = get_image_path(self.target_filename, for_saving=True)
 
             success, enc_img = cv2.imencode('.png', cropped)
             if success:
                 with open(save_path, 'wb') as f:
                     f.write(enc_img)
-                self.gui.auto.log(f"✨ 成功框選更新模板圖片: {self.target_filename} (尺寸: {cw}x{ch}px)")
+                self.gui.auto.log(f"✨ 成功框選更新自訂模板: {self.target_filename} (已存至 images/custom/，永久不受 Git 覆蓋！尺寸: {cw}x{ch}px)")
                 self.destroy()
                 self.callback(True, f"成功更新: {self.target_filename}")
                 return

@@ -29,8 +29,12 @@ from datetime import datetime
 # 取得圖片目錄路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(BASE_DIR, 'images')
+CUSTOM_IMAGE_DIR = os.path.join(IMAGE_DIR, 'custom')
 
 def get_image_path(filename):
+    custom_path = os.path.join(CUSTOM_IMAGE_DIR, filename)
+    if os.path.exists(custom_path):
+        return custom_path
     return os.path.join(IMAGE_DIR, filename)
 
 def center_window_on_cursor(root, width, height):

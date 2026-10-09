@@ -37,4 +37,10 @@ arena_config.json
 scratch_*.py
 images/test_*.png
 images/*_fail.png
+test_*.png
+test_*.ps1
+test_*.py
 *.bak
+
+# Local custom images (never tracked, prevents git overwrite)
+images/custom/
