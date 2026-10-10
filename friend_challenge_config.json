@@ -1,6 +1,6 @@
 {
-  "wolf_friends": "1,4,8,10,11",
-  "defense_friends": "",
+  "wolf_friends": "1,2,4,5,7,8,",
+  "defense_friends": "4,9,12,13,14,15",
   "camp_coord": [
     3188,
     207
@@ -109,10 +109,10 @@
     565
   ],
   "withdraw_confirm_coord": [
-    3230,
-    630
+    3059,
+    548
   ],
   "poll_interval": "5",
   "threshold": "0.9",
-  "challenge_mode": "wolf"
+  "challenge_mode": "defense"
 }

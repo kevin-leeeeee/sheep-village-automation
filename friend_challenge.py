@@ -165,18 +165,6 @@ class FriendChallengeApp:
         self.hotkey_listener.daemon = True
         self.hotkey_listener.start()
 
-        # 滑鼠右鍵監聽 (按右鍵跳過當前)
-        def on_mouse_click(x, y, button, pressed):
-            try:
-                if pressed and button == pynput.mouse.Button.right:
-                    if self.running and not self.capturing:
-                        self.root.after(0, lambda: self.trigger_skip("滑鼠右鍵"))
-            except Exception:
-                pass
-        self.mouse_listener = pynput.mouse.Listener(on_click=on_mouse_click)
-        self.mouse_listener.daemon = True
-        self.mouse_listener.start()
-
     def trigger_skip(self, source="右鍵"):
         if self.running and not self.skip_current:
             self.skip_current = True
@@ -941,7 +929,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 if task_type == 'wolf':
@@ -953,7 +940,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 self.click_coord(self.config["challenge_btn_coord"], "挑戰")
@@ -962,7 +948,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 if task_type == 'defense':
@@ -993,7 +978,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 self.click_coord(self.config["start_battle_coord"], "開始戰鬥")
@@ -1005,7 +989,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 self.log("🔍 開始偵測戰鬥結束(尋找獲得獎勵截圖)...")
@@ -1038,7 +1021,6 @@ class FriendChallengeApp:
                 if not self.running: break
                 if self.skip_current:
                     self._handle_skip_recovery(target_idx, type_name, entered_home, in_battle, task_type, load_delay, delay)
-                    current_page = 1
                     continue
                 
                 time.sleep(0.5)
@@ -1066,7 +1048,6 @@ class FriendChallengeApp:
                     if not self.running: break
                     self.click_coord(self.config.get("withdraw_confirm_coord", [0,0]), "撤防確定")
                     self.interruptible_sleep(delay)
-                    current_page = 1  # 撤防回城後，好友列表自動回到第 1 頁
                 
             if self.running:
                 self.log("✨ === 所有挑戰任務完成 ===")
@@ -1100,10 +1081,6 @@ class FriendChallengeApp:
                 time.sleep(delay)
                 self.click_coord(self.config.get("withdraw_confirm_coord", [0,0]), "撤防確定")
                 time.sleep(delay)
-            elif entered_home:
-                # 仍在好友家園，點擊回家回主城
-                self.click_coord(self.config.get("gohome_coord", [0,0]), "回家")
-                time.sleep(load_delay)
         except Exception as e:
             self.log(f"⚠️ 跳過復原流程提示: {e}")
         finally:
