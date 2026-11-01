@@ -13,25 +13,21 @@
 7. 視窗置頂與 F10 全域緊急停止
 """
 
+from dpi_setup import configure_dpi
+
+configure_dpi()
+
 import sys
 import os
 import shutil
 import ctypes
 from ctypes import wintypes
 import json
+from window_state import WindowState
+from modern_ui import workspace, card, form, finish, update_status, coordinate_table, normalize_log_message
 import time
 import threading
 from datetime import datetime
-
-# 啟用 Windows DPI 自適應
-if sys.platform == "win32":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
 
 import cv2
 import numpy as np
@@ -109,10 +105,12 @@ class ArenaDefenseAutomation:
         self.detected_monitor_name = None
 
     def log(self, message):
+        message = normalize_log_message(message)
         timestamp = datetime.now().strftime('%H:%M:%S')
         log_message = f"[{timestamp}] {message}"
         self.gui.log_text.insert('end', log_message + '\n')
         self.gui.log_text.see('end')
+        update_status(self.gui, message)
 
     def capture_screen(self):
         """多螢幕智慧截圖：自動鎖定遊戲座標所在螢幕 (GDI 原生設備截圖)"""
@@ -366,7 +364,7 @@ class ArenaDefenseAutomation:
                 return True
 
             shot = self.capture_screen()
-            
+
             # 優先辨識勝利、失敗或抽獎特徵
             pos_win, val_win, _ = self.find_image_multiscale(['arena_shengli.png'], shot)
             if pos_win:
@@ -599,7 +597,7 @@ class ArenaGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("保衛羊村 - 競技場挑戰 (防守 & 進攻)")
-        center_window_on_cursor(self.root, 435, 690)
+        center_window_on_cursor(self.root, 600, 840)
 
         self.topmost = True
         self.root.attributes('-topmost', True)
@@ -633,243 +631,108 @@ class ArenaGUI:
         self.auto = ArenaDefenseAutomation(self)
 
         self.setup_ui()
+        self.window_state = WindowState(self.root, CONFIG_FILE, minimum=(560, 650))
+        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
         self.setup_global_hotkeys()
         self.load_config()
 
+    def on_close(self):
+        self.auto.running = False
+        self.save_config()
+        for name in ('keyboard_listener', 'hotkey_listener'):
+            listener = getattr(self, name, None)
+            if listener is not None:
+                listener.stop()
+        self.root.destroy()
+
     def setup_ui(self):
-        # 建立外層滾動容器，確保小螢幕按鈕絕不被截斷
-        self.canvas_container = tk.Frame(self.root)
-        self.canvas_container.pack(fill=tk.BOTH, expand=True)
-
-        self.main_canvas = tk.Canvas(self.canvas_container, highlightthickness=0)
-        self.main_scrollbar = ttk.Scrollbar(self.canvas_container, orient="vertical", command=self.main_canvas.yview)
-
-        main = tk.Frame(self.main_canvas, padx=6, pady=4)
-        self.canvas_window_id = self.main_canvas.create_window((0, 0), window=main, anchor="nw")
-
-        def _on_main_configure(e):
-            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
-        main.bind("<Configure>", _on_main_configure)
-
-        def _on_canvas_configure(e):
-            self.main_canvas.itemconfig(self.canvas_window_id, width=e.width)
-        self.main_canvas.bind('<Configure>', _on_canvas_configure)
-
-        self.main_canvas.configure(yscrollcommand=self.main_scrollbar.set)
-        self.main_canvas.pack(side="left", fill="both", expand=True)
-        self.main_scrollbar.pack(side="right", fill="y")
-
-        # 滾輪智慧滾動：當游標未在日誌區時，滾動主介面
-        def _on_mousewheel(event):
-            try:
-                if self.main_canvas.winfo_height() < main.winfo_reqheight():
-                    widget = self.root.winfo_containing(event.x_root, event.y_root)
-                    if widget is not getattr(self, 'log_text', None):
-                        self.main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-
-        self.root.bind_all("<MouseWheel>", _on_mousewheel)
-
-        # 頂部標題與置頂按鈕
-        header_frame = tk.Frame(main)
-        header_frame.pack(fill='x', pady=2)
-
-        title_lbl = tk.Label(header_frame, text='競技場挑戰 (防守 & 進攻)', font=('Arial', 12, 'bold'))
-        title_lbl.pack(side='left')
-
-        self.topmost_btn = tk.Button(header_frame, text='視窗置頂', command=self.toggle_topmost, bg='lightgreen', relief='sunken', width=8)
-        self.topmost_btn.pack(side='right', padx=2)
-
-        # 權限顯示
-        admin_frame = tk.Frame(main)
-        admin_frame.pack(pady=1, fill="x")
-        if is_admin():
-            admin_label = tk.Label(admin_frame, text="✓ 管理員權限運行", fg="green", font=('Arial', 9))
-        else:
-            admin_label = tk.Label(admin_frame, text="⚠ 非管理員權限運行", fg="orange", font=('Arial', 9))
-        admin_label.pack(side=tk.LEFT)
-
-        if not is_admin():
-            elevate_btn = tk.Button(admin_frame, text="以管理員身份運行", command=self.request_admin, bg="#FF9800", fg="white", font=('Arial', 8), pady=1)
-            elevate_btn.pack(side=tk.RIGHT)
-
-        # 🎮 模式選擇區 (4 種自由選擇)
-        mode_box = tk.LabelFrame(main, text='🎮 模式選擇', padx=5, pady=3)
-        mode_box.pack(fill='x', pady=2)
-
-        m_row1 = tk.Frame(mode_box)
-        m_row1.pack(fill='x', pady=1)
-        self.rb_defense = tk.Radiobutton(m_row1, text='🛡️ 防守模式', variable=self.mode_var, value='defense', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#0D47A1')
-        self.rb_defense.pack(side='left', padx=10)
-        self.rb_attack = tk.Radiobutton(m_row1, text='⚔️ 進攻模式', variable=self.mode_var, value='attack', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#B71C1C')
-        self.rb_attack.pack(side='left', padx=10)
-
-        m_row2 = tk.Frame(mode_box)
-        m_row2.pack(fill='x', pady=1)
-        self.rb_atd = tk.Radiobutton(m_row2, text='⚔️➔🛡️ 先攻後防', variable=self.mode_var, value='attack_then_defense', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#8E24AA')
-        self.rb_atd.pack(side='left', padx=10)
-        self.rb_dta = tk.Radiobutton(m_row2, text='🛡️➔⚔️ 先防後攻', variable=self.mode_var, value='defense_then_attack', command=self.on_mode_change, font=('Arial', 9, 'bold'), fg='#00897B')
-        self.rb_dta.pack(side='left', padx=10)
-
-        # 運行控制區
-        control_frame = tk.LabelFrame(main, text='運行控制', padx=5, pady=3)
-        control_frame.pack(fill='x', pady=2)
-
-        cf = tk.Frame(control_frame)
-        cf.pack(fill='x')
-
-        self.start_btn = tk.Button(cf, text='啟動挑戰', command=self.auto.start, bg="#4CAF50", fg="white", font=('Arial', 10, 'bold'))
-        self.start_btn.pack(side='left', expand=True, fill='x', padx=2)
-
-        self.stop_btn = tk.Button(cf, text='停止 (F10)', command=self.auto.stop, bg="#f44336", fg="white", font=('Arial', 10, 'bold'), state='disabled')
-        self.stop_btn.pack(side='left', expand=True, fill='x', padx=2)
-
+        pages = workspace(self, '競技場挑戰', '安排防守與進攻，自動完成戰鬥與抽獎。',
+                          self.auto.start, self.auto.stop, self.save_config, is_admin(), compact=True)
+        task_tab, coord_tab, timing_tab = pages
+        mode_box = card(task_tab, '挑戰方式', '選擇單一模式，或安排進攻與防守順序')
+        mode_box.pack(fill='x', pady=4)
+        mode_box.columnconfigure((0, 1), weight=1, uniform='mode')
+        for index, (attribute, title, value) in enumerate([
+                ('rb_defense', '防守模式', 'defense'), ('rb_attack', '進攻模式', 'attack'),
+                ('rb_atd', '先攻後防', 'attack_then_defense'), ('rb_dta', '先防後攻', 'defense_then_attack')]):
+            button = tk.Radiobutton(mode_box, text=title, variable=self.mode_var, value=value,
+                                    command=self.on_mode_change, indicatoron=False, anchor='w')
+            button.grid(row=index // 2, column=index % 2, sticky='ew', padx=3, pady=3, ipady=5)
+            setattr(self, attribute, button)
+        rounds = card(task_tab, '挑戰次數', '依所選模式執行各階段的挑戰')
+        rounds.pack(fill='x', pady=4)
+        form(rounds, [('防守次數', self.defense_rounds_var, '次'),
+                      ('進攻次數', self.attack_rounds_var, '次')])
         # 📍 點擊座標配置區 (清楚獨立)
-        coord_box = tk.LabelFrame(main, text='📍 基礎座標配置 (點擊按鈕 ➔ 移至位置按 K 鍵)', padx=5, pady=3)
+        coord_box = card(coord_tab, '戰鬥操作座標', '按「擷取」後，將滑鼠移至目標並按 K')
         coord_box.pack(fill='x', pady=2)
 
-        # ① 防守切磋座標
-        r_def = tk.Frame(coord_box)
-        r_def.pack(fill='x', pady=1)
-        tk.Button(r_def, text='① 防守切磋 (K鍵)', command=lambda: self.start_capture('spar_defense', '移至左側【防守切磋按鈕】按 K 鍵'), bg="#2196F3", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_spar_def = tk.Label(r_def, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_spar_def.pack(side='left', padx=6)
-
-        # ② 進攻切磋座標
-        r_att = tk.Frame(coord_box)
-        r_att.pack(fill='x', pady=1)
-        tk.Button(r_att, text='② 進攻切磋 (K鍵)', command=lambda: self.start_capture('spar_attack', '移至右側【進攻切磋按鈕】按 K 鍵'), bg="#D32F2F", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_spar_att = tk.Label(r_att, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_spar_att.pack(side='left', padx=6)
-
-        # ③ 切磋後挑戰座標 (進攻專用)
-        r_chal = tk.Frame(coord_box)
-        r_chal.pack(fill='x', pady=1)
-        tk.Button(r_chal, text='③ 切磋後挑戰(K鍵)', command=lambda: self.start_capture('attack_challenge', '移至切磋後的彈窗【挑戰按鈕】按 K 鍵'), bg="#E91E63", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_challenge = tk.Label(r_chal, text='未設定 [進攻專用]', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_challenge.pack(side='left', padx=6)
-
-        # ④ 開始戰鬥座標
-        r2 = tk.Frame(coord_box)
-        r2.pack(fill='x', pady=1)
-        tk.Button(r2, text='④ 開始戰鬥 (K鍵)', command=lambda: self.start_capture('start_battle', '移至【開始戰鬥按鈕】按 K 鍵'), bg="#FF9800", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_start = tk.Label(r2, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_start.pack(side='left', padx=6)
-
-        # ⑤ 抽獎卡片座標
-        r3 = tk.Frame(coord_box)
-        r3.pack(fill='x', pady=1)
-        tk.Button(r3, text='⑤ 抽獎卡片 (K鍵)', command=lambda: self.start_capture('draw', '移至【中間抽獎卡片】按 K 鍵'), bg="#9C27B0", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_draw = tk.Label(r3, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_draw.pack(side='left', padx=6)
-
-        # ⑥ 確定按鈕座標
-        r4 = tk.Frame(coord_box)
-        r4.pack(fill='x', pady=1)
-        tk.Button(r4, text='⑥ 確定按鈕 (K鍵)', command=lambda: self.start_capture('confirm', '移至獲獎【確定按鈕】按 K 鍵'), bg="#009688", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_confirm = tk.Label(r4, text='未設定', font=('Arial', 9), fg='#B71C1C')
-        self.lbl_confirm.pack(side='left', padx=6)
+        labels = coordinate_table(coord_box, [
+            ('lbl_spar_def', '防守切磋', '未設定', '擷取 (K)',
+             lambda: self.start_capture('spar_defense', '移至防守切磋按鈕，按 K')),
+            ('lbl_spar_att', '進攻切磋', '未設定', '擷取 (K)',
+             lambda: self.start_capture('spar_attack', '移至進攻切磋按鈕，按 K')),
+            ('lbl_challenge', '進攻挑戰', '未設定', '擷取 (K)',
+             lambda: self.start_capture('attack_challenge', '移至切磋後的挑戰按鈕，按 K')),
+            ('lbl_start', '開始戰鬥', '未設定', '擷取 (K)',
+             lambda: self.start_capture('start_battle', '移至開始戰鬥按鈕，按 K')),
+            ('lbl_draw', '抽獎卡片', '未設定', '擷取 (K)',
+             lambda: self.start_capture('draw', '移至抽獎卡片，按 K')),
+            ('lbl_confirm', '獎勵確定', '未設定', '擷取 (K)',
+             lambda: self.start_capture('confirm', '移至獲獎確定按鈕，按 K')),
+        ])
+        for attribute, label in labels.items():
+            setattr(self, attribute, label)
 
         # 🐺 進攻出戰派狼配置 (進攻專用)
-        self.attack_box = tk.LabelFrame(main, text='🐺 進攻出戰派狼配置 (出戰隊列)', padx=5, pady=3)
+        self.attack_box = card(task_tab, '進攻隊列', '設定進攻時派出的狼隻與隊列位置')
         self.attack_box.pack(fill='x', pady=2)
 
         # 派狼選項列
         d_row1 = tk.Frame(self.attack_box)
         d_row1.pack(fill='x', pady=1)
         tk.Radiobutton(d_row1, text='全部自動派出 (自動隊列)', variable=self.dispatch_mode_var, value='auto', font=('Arial', 8, 'bold')).pack(side='left')
-        tk.Radiobutton(d_row1, text='指定派出狼隻:', variable=self.dispatch_mode_var, value='manual', font=('Arial', 8, 'bold')).pack(side='left', padx=(8, 0))
+        tk.Radiobutton(d_row1, text='指定派出狼隻:', variable=self.dispatch_mode_var, value='manual', font=('Arial', 8, 'bold')).pack(side='left', padx=(4, 0))
         self.entry_wolves = tk.Entry(d_row1, textvariable=self.selected_wolves_var, width=6, font=('Arial', 8))
         self.entry_wolves.pack(side='left', padx=2)
-        tk.Label(d_row1, text='(如: 1 或 1,2)', font=('Arial', 8), fg='gray').pack(side='left')
 
-        # 狼槽座標設定行
-        d_row2 = tk.Frame(self.attack_box)
-        d_row2.pack(fill='x', pady=1)
-        tk.Button(d_row2, text='自動隊列座標(K鍵)', command=lambda: self.start_capture('auto_queue', '移至【自動隊列按鈕】按 K 鍵'), bg="#E65100", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_auto_queue = tk.Label(d_row2, text='未設定', font=('Arial', 8), fg='#B71C1C')
-        self.lbl_auto_queue.pack(side='left', padx=6)
 
-        d_row3 = tk.Frame(self.attack_box)
-        d_row3.pack(fill='x', pady=1)
-        tk.Button(d_row3, text='兩點生成狼槽(1~8)', command=self.start_two_point_wolf_wizard, bg="#5C6BC0", fg="white", font=('Arial', 8, 'bold'), width=17).pack(side='left')
-        self.lbl_wolf_slots = tk.Label(d_row3, text='(0/8 點)', font=('Arial', 8), fg='#B71C1C')
-        self.lbl_wolf_slots.pack(side='left', padx=6)
+        dispatch_coords = tk.Frame(self.attack_box)
+        dispatch_coords.pack(fill='x', pady=(6, 0))
+        dispatch_labels = coordinate_table(dispatch_coords, [
+            ('auto', '自動隊列', '未設定', '擷取 (K)',
+             lambda: self.start_capture('auto_queue', '移至自動隊列按鈕，按 K')),
+            ('slots', '出戰狼槽', '0/8 點', '兩點定位', self.start_two_point_wolf_wizard),
+        ])
+        self.lbl_auto_queue = dispatch_labels['auto']
+        self.lbl_wolf_slots = dispatch_labels['slots']
 
         # 清空與標記預覽按鈕行 (並排截圖校正，不增加垂直高度)
-        r_clear = tk.Frame(main)
+        r_clear = card(coord_tab, '預覽與校正', '檢查定位標記，或更新戰鬥辨識圖片')
         r_clear.pack(fill='x', pady=1)
-        tk.Button(r_clear, text='🖥️ 標記預覽 (即時微調)', command=self.open_screen_overlay, bg="#673AB7", fg="white", font=('Arial', 8, 'bold')).pack(side='left', fill='x', expand=True, padx=(0, 2))
-        tk.Button(r_clear, text='📸 截圖校正', command=self.open_image_crop_dialog, bg="#00897B", fg="white", font=('Arial', 8, 'bold')).pack(side='left', padx=2)
-        tk.Button(r_clear, text='清空防守', command=self.clear_defense_coords, font=('Arial', 8)).pack(side='left', padx=2)
-        tk.Button(r_clear, text='清空進攻', command=self.clear_attack_coords, font=('Arial', 8)).pack(side='left', padx=2)
+        r_clear.columnconfigure((0, 1), weight=1, uniform='preview')
+        for index, (title, command) in enumerate([
+                ('標記預覽與微調', self.open_screen_overlay), ('截圖校正', self.open_image_crop_dialog),
+                ('清空防守座標', self.clear_defense_coords), ('清空進攻座標', self.clear_attack_coords)]):
+            tk.Button(r_clear, text=title, command=command).grid(
+                row=index // 2, column=index % 2, sticky='ew', padx=3, pady=4)
 
-        # ⚙️ 運行參數配置 (按時間執行順序排列)
-        param_box = tk.LabelFrame(main, text='⚙️ 運行參數配置 (按執行順序排列)', padx=5, pady=3)
-        param_box.pack(fill='x', pady=2)
 
-        # 頂部順序導引列與說明按鈕
-        pb_head = tk.Frame(param_box)
-        pb_head.pack(fill='x', pady=(0, 2))
-        tk.Label(pb_head, text='順序: ①切磋 ➔ ②戰鬥偵測 ➔ ③卡片洗牌 ➔ ④翻牌揭曉 ➔ ⑤確定結算', font=('Arial', 8, 'bold'), fg='#0D47A1').pack(side='left')
-        tk.Button(pb_head, text='❓ 階段說明', command=self.show_stage_guide, bg="#009688", fg="white", font=('Arial', 8, 'bold')).pack(side='right')
-
-        # 行 1: 防守次數 & 進攻次數 & ① 切磋後等待
-        p_row1 = tk.Frame(param_box)
-        p_row1.pack(fill='x', pady=1)
-        tk.Label(p_row1, text='🛡️ 防守次數:', font=('Arial', 8, 'bold'), fg='#0D47A1').pack(side='left')
-        tk.Entry(p_row1, textvariable=self.defense_rounds_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
-
-        tk.Label(p_row1, text='⚔️ 進攻次數:', font=('Arial', 8, 'bold'), fg='#B71C1C').pack(side='left', padx=(6, 0))
-        tk.Entry(p_row1, textvariable=self.attack_rounds_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
-
-        tk.Label(p_row1, text='① 切磋等待:', font=('Arial', 8, 'bold'), fg='#1565C0').pack(side='left', padx=(6, 0))
-        self.spar_delay_var = tk.StringVar(value='2.0')
-        tk.Entry(p_row1, textvariable=self.spar_delay_var, width=3, font=('Arial', 8)).pack(side='left', padx=1)
-        tk.Label(p_row1, text='s', font=('Arial', 8), fg='gray').pack(side='left')
-
-        # 行 2: ② 戰鬥等待 & 動態輪詢
-        p_battle = tk.Frame(param_box)
-        p_battle.pack(fill='x', pady=1)
-        tk.Label(p_battle, text='② 戰鬥等待:', font=('Arial', 8, 'bold'), fg='#0D47A1').pack(side='left')
-        self.battle_initial_var = tk.StringVar(value='10.0')
-        tk.Entry(p_battle, textvariable=self.battle_initial_var, width=4, font=('Arial', 8, 'bold')).pack(side='left', padx=2)
-        tk.Label(p_battle, text='秒 ➔ 每隔:', font=('Arial', 8)).pack(side='left')
-        self.battle_poll_var = tk.StringVar(value='1.0')
-        tk.Entry(p_battle, textvariable=self.battle_poll_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
-        tk.Label(p_battle, text='秒辨識 (超時:', font=('Arial', 8)).pack(side='left')
-        self.battle_timeout_var = tk.StringVar(value='50.0')
-        tk.Entry(p_battle, textvariable=self.battle_timeout_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
-        tk.Label(p_battle, text='s)', font=('Arial', 8)).pack(side='left')
-
-        # 行 3: ③ 洗牌等待 ➔ ④ 翻牌等待 ➔ ⑤ 確定後等待
-        p_row2 = tk.Frame(param_box)
-        p_row2.pack(fill='x', pady=1)
-        tk.Label(p_row2, text='③ 洗牌等待:', font=('Arial', 8, 'bold'), fg='#E65100').pack(side='left')
-        self.shuffle_delay_var = tk.StringVar(value='1.2')
-        tk.Entry(p_row2, textvariable=self.shuffle_delay_var, width=4, font=('Arial', 8, 'bold')).pack(side='left', padx=2)
-
-        tk.Label(p_row2, text='④ 翻牌等待:', font=('Arial', 8, 'bold'), fg='#6A1B9A').pack(side='left', padx=(6, 0))
-        self.draw_delay_var = tk.StringVar(value='2.5')
-        tk.Entry(p_row2, textvariable=self.draw_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
-
-        tk.Label(p_row2, text='⑤ 確定後等待:', font=('Arial', 8, 'bold'), fg='#00695C').pack(side='left', padx=(6, 0))
-        self.confirm_delay_var = tk.StringVar(value='2.0')
-        tk.Entry(p_row2, textvariable=self.confirm_delay_var, width=4, font=('Arial', 8)).pack(side='left', padx=2)
-
-        # 即時日誌區
-        log_frame = tk.LabelFrame(main, text='即時日誌', padx=3, pady=2)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=2)
-
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, font=('Arial', 8))
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-
-        # 底部狀態列
-        bottom_f = tk.Frame(main)
-        bottom_f.pack(fill='x', pady=2)
-        tk.Button(bottom_f, text='清空日誌', command=lambda: self.log_text.delete('1.0', tk.END), font=('Arial', 8)).pack(side='left')
-        tk.Label(bottom_f, text='按 F10 鍵可全域緊急停止', font=('Arial', 8), fg='gray').pack(side='right')
+        param_box = card(timing_tab, '節奏與辨識', '依戰鬥動畫與遊戲載入速度調整等待時間')
+        param_box.pack(fill='x', pady=4)
+        fields = [('切磋後等待', 'spar_delay_var', '2.0'), ('戰鬥初始等待', 'battle_initial_var', '10.0'),
+                  ('辨識間隔', 'battle_poll_var', '1.0'), ('戰鬥等待上限', 'battle_timeout_var', '50.0'),
+                  ('卡片洗牌等待', 'shuffle_delay_var', '1.2'), ('翻牌等待', 'draw_delay_var', '2.5'),
+                  ('確定後等待', 'confirm_delay_var', '2.0')]
+        rows = []
+        for label, attribute, default in fields:
+            variable = tk.StringVar(value=default)
+            setattr(self, attribute, variable)
+            rows.append((label, variable, '秒'))
+        form(param_box, rows)
+        tk.Button(param_box, text='查看階段說明', command=self.show_stage_guide).grid(
+            row=len(rows), column=0, columnspan=3, sticky='w', pady=8)
+        finish(self, pages)
 
     def get_current_spar_coord(self):
         mode = self.mode_var.get()
@@ -1070,10 +933,10 @@ class ArenaGUI:
         self.topmost = not self.topmost
         self.root.attributes('-topmost', self.topmost)
         if self.topmost:
-            self.topmost_btn.config(bg='lightgreen', relief='sunken')
+            self.topmost_btn.config(text='置頂：開', bg='#E6EFFA', relief='solid')
             self.auto.log('視窗置頂已開啟')
         else:
-            self.topmost_btn.config(bg='SystemButtonFace', relief='raised')
+            self.topmost_btn.config(text='置頂：關', bg='white', relief='solid')
             self.auto.log('視窗置頂已關閉')
 
     def show_stage_guide(self):
@@ -1128,6 +991,9 @@ class ArenaGUI:
             'confirm_delay': self.confirm_delay_var.get(),
             'topmost': self.topmost
         }
+        geometry = self.window_state.snapshot()
+        if geometry:
+            data['window_geometry'] = geometry
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1180,13 +1046,12 @@ class ArenaGUI:
                 self.topmost = bool(data['topmost'])
                 self.root.attributes('-topmost', self.topmost)
                 if self.topmost:
-                    self.topmost_btn.config(bg='lightgreen', relief='sunken')
+                    self.topmost_btn.config(text='置頂：開', bg='#E6EFFA', relief='solid')
                 else:
-                    self.topmost_btn.config(bg='SystemButtonFace', relief='raised')
+                    self.topmost_btn.config(text='置頂：關', bg='white', relief='solid')
 
             self.on_mode_change()
             self.update_coord_labels()
-            self.auto.log("📂 已成功載入上次保存的配置與座標")
         except Exception as e:
             self.auto.log(f"載入配置失敗: {e}")
 
@@ -1660,7 +1525,7 @@ class CropSelectorOverlay(tk.Toplevel):
         pil_img = Image.fromarray(img_rgb)
         if pil_img.size != (width, height):
             pil_img = pil_img.resize((width, height), Image.Resampling.LANCZOS)
-        
+
         self.bg_photo = ImageTk.PhotoImage(pil_img)
         self.canvas.create_image(0, 0, image=self.bg_photo, anchor='nw')
 
