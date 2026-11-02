@@ -72,7 +72,7 @@ python friend_challenge.py
 | `friend_challenge_config.json` | 好友編號、挑戰座標、參數與視窗位置 |
 | `images/custom/` | 自行擷取的辨識圖片，已列入 Git 忽略清單 |
 
-程式在啟動時統一設定 Windows DPI 模式。更新程式後需完全關閉再重開，才會套用。遊戲視窗位置、縮放比例或版面變動後，請重新檢查擷取座標。
+三個程式都在啟動時使用 per-monitor DPI 模式，讓介面保持清晰。好友挑戰首次讀取舊設定時，會依各螢幕的座標範圍轉換舊點位，並保留 `friend_challenge_config.json.before-dpi.bak` 備份；之後不會重複轉換。更新程式後需完全關閉再重開，才會套用。遊戲視窗位置、縮放比例或版面變動後，請用「座標設定」的標記預覽檢查點位。
 
 ## 共用程式與測試
 
@@ -83,7 +83,7 @@ python friend_challenge.py
 執行回歸測試：
 
 ```powershell
-python -m unittest dpi_setup_test ui_layout_test window_state_test wolf_mine_test friend_challenge_test
+python -m unittest dpi_setup_test ui_layout_test window_state_test wolf_mine_test friend_challenge_test friend_coordinates_test
 ```
 
 測試涵蓋 DPI 模式、版面、視窗記憶與導覽流程。測試通過不代表每種遊戲畫面都能辨識；初次設定後，請先觀察少量任務的執行結果。

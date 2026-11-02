@@ -7,7 +7,7 @@ def configure_dpi():
     if sys.platform != 'win32':
         return
     try:
-        # 延用敲狼與競技場的每螢幕 DPI 模式，保留原有實體座標系統。
+        # 在介面與滑鼠套件載入前啟用每螢幕 DPI，避免系統放大造成模糊。
         result = ctypes.windll.shcore.SetProcessDpiAwareness(2)
         if result == 0:
             return

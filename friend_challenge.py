@@ -18,6 +18,8 @@ import win32api
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
+from friend_coordinates import SPACE, migrate_config_file
+from coordinate_preview import CoordinatePreview
 
 # 關閉 PyAutoGUI 自動觸發的邊角防護異常 (改用全域 F10 鍵緊急停止)
 pyautogui.FAILSAFE = False
@@ -43,6 +45,7 @@ if not os.path.exists(IMAGE_DIR):
 CONFIG_FILE = 'friend_challenge_config.json'
 
 DEFAULT_CONFIG = {
+    "coordinate_space": SPACE,
     "challenge_mode": "wolf_then_defense",
     "wolf_friends": "1,2,3",
     "defense_friends": "4,5,6",
@@ -79,13 +82,14 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                for k, v in DEFAULT_CONFIG.items():
-                    if k not in data:
-                        data[k] = v
-                return data
         except Exception as e:
             print(f"讀取設定檔失敗: {e}")
             return DEFAULT_CONFIG.copy()
+        data = migrate_config_file(CONFIG_FILE, data)
+        for k, v in DEFAULT_CONFIG.items():
+            if k not in data:
+                data[k] = v
+        return data
     return DEFAULT_CONFIG.copy()
 
 def save_config(data):
@@ -168,6 +172,7 @@ class FriendChallengeApp:
         self.capture_mode = None
         self.temp_p1 = None
         self.capture_listener = None
+        self.screen_overlay = None
 
         self.setup_ui()
         self.restore_window_geometry()
@@ -318,6 +323,9 @@ class FriendChallengeApp:
         tk.Entry(wolf_lf, textvariable=self.dispatch_wolves_var, width=15, font=('Arial', 10)).grid(row=3, column=1, sticky='w', pady=3, columnspan=2)
 
         # -- 戰鬥主流程座標設定 --
+        preview_lf = card(coord_tab, '預覽與校正', '在遊戲畫面查看與拖曳座標')
+        preview_lf.pack(fill='x', pady=5)
+        tk.Button(preview_lf, text='標記預覽與微調', command=self.open_coordinate_preview).pack(fill='x')
         main_coord_lf = card(coord_tab, '戰鬥與好友', '按「擷取」後，將滑鼠移至目標並按 K')
         main_coord_lf.pack(fill='x', pady=5)
 
@@ -818,6 +826,10 @@ class FriendChallengeApp:
 
     def start_bot(self):
         if self.running: return
+        overlay = getattr(self, 'screen_overlay', None)
+        if overlay is not None and overlay.winfo_exists():
+            overlay.destroy()
+            self.screen_overlay = None
         self.save_current_config()
         self.tasks = self.parse_friends()
         if not self.tasks:
@@ -868,6 +880,28 @@ class FriendChallengeApp:
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.skip_btn.config(state=tk.DISABLED)
+
+    def open_coordinate_preview(self):
+        if self.running or self.capturing:
+            self.log('請先停止執行或結束座標擷取，再開啟預覽。')
+            return
+        if self.screen_overlay is not None and self.screen_overlay.winfo_exists():
+            self.screen_overlay.destroy()
+            self.screen_overlay = None
+            return
+        self.save_current_config()
+        self.screen_overlay = CoordinatePreview(self.root, self.config, self.apply_preview_coordinates)
+
+    def apply_preview_coordinates(self, edited):
+        for key, (vx, vy) in self.coord_vars.items():
+            vx.set(str(edited[key][0]))
+            vy.set(str(edited[key][1]))
+        self.aq_x.set(str(edited['auto_queue_coord'][0]))
+        self.aq_y.set(str(edited['auto_queue_coord'][1]))
+        self.config['coordinates'] = edited['coordinates']
+        self.config['wolf_slots'] = edited['wolf_slots']
+        self.save_current_config()
+        self.log('預覽座標已儲存並套用。')
 
     def click_coord(self, coord, name="", allow_skip=False):
         if not self.running: return False
